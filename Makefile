@@ -10,6 +10,8 @@
 
 #---------------------build config-------------------------
 
+CUSTOM_ROCKSDB_PATH ?= /home/gjr/mylibs/lorcdb
+
 # Database bindings
 BIND_WIREDTIGER ?= 0
 BIND_LEVELDB ?= 0
@@ -47,8 +49,9 @@ ifeq ($(BIND_LEVELDB), 1)
 endif
 
 ifeq ($(BIND_ROCKSDB), 1)
-	LDFLAGS += -lrocksdb
-	SOURCES += $(wildcard rocksdb/*.cc)
+	CXXFLAGS += -I$(CUSTOM_ROCKSDB_PATH)/include
+	LDFLAGS += -L$(CUSTOM_ROCKSDB_PATH)/lib -lrocksdb -Wl,-rpath,$(CUSTOM_ROCKSDB_PATH)/lib
+    SOURCES += $(wildcard rocksdb/*.cc)
 endif
 
 ifeq ($(BIND_LMDB), 1)

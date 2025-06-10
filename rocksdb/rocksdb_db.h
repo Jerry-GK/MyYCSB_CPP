@@ -91,6 +91,7 @@ class RocksdbDB : public DB {
   Status (RocksdbDB::*method_delete_)(const std::string &, const std::string &);
 
   int fieldcount_;
+  bool disable_wal_;
 
   static std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
   static rocksdb::DB *db_;
