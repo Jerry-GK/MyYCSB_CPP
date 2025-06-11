@@ -59,6 +59,9 @@ namespace {
   const std::string PROP_BLOB_CACHE_SIZE = "rocksdb.blob_cache_size";
   const std::string PROP_BLOB_CACHE_SIZE_DEFAULT = "0";
 
+  const std::string PROP_RANGE_CACHE_SIZE = "rocksdb.range_cache_size";
+  const std::string PROP_RANGE_CACHE_SIZE_DEFAULT = "0";
+
   const std::string PROP_COMPRESSION = "rocksdb.compression";
   const std::string PROP_COMPRESSION_DEFAULT = "no";
 
@@ -134,6 +137,7 @@ namespace {
   static std::shared_ptr<rocksdb::Env> env_guard;
   static std::shared_ptr<rocksdb::Cache> block_cache;
   static std::shared_ptr<rocksdb::Cache> blob_cache;
+  static std::shared_ptr<rocksdb::LogicallyOrderedSliceVecRangeCache> range_cache;
 #if ROCKSDB_MAJOR < 8
   static std::shared_ptr<rocksdb::Cache> block_cache_compressed;
 #endif
@@ -339,6 +343,12 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
       }
     }
 
+    size_t range_cache_size = std::stoul(props.GetProperty(PROP_RANGE_CACHE_SIZE, PROP_RANGE_CACHE_SIZE_DEFAULT));
+    if (range_cache_size > 0) {
+      range_cache = rocksdb::NewRBTreeSliceVecRangeCache(range_cache_size, false);
+      opt->range_cache = range_cache;
+    }
+
     int val = std::stoi(props.GetProperty(PROP_MAX_BG_JOBS, PROP_MAX_BG_JOBS_DEFAULT));
     if (val != 0) {
       opt->max_background_jobs = val;
@@ -509,10 +519,15 @@ DB::Status RocksdbDB::ReadSingle(const std::string &table, const std::string &ke
 DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &key, int len,
                                  const std::vector<std::string> *fields,
                                  std::vector<std::vector<Field>> &result) {
-  rocksdb::Iterator *db_iter = db_->NewIterator(rocksdb::ReadOptions());
-  db_iter->Seek(key);
-  for (int i = 0; db_iter->Valid() && i < len; i++) {
-    std::string data = db_iter->value().ToString();
+  std::vector<std::string> keys;
+  std::vector<std::string> values;
+  rocksdb::Status s = db_->Scan(rocksdb::ReadOptions(), db_->DefaultColumnFamily(), rocksdb::Slice(key), len, &keys, &values);
+
+  for (size_t i = 0; i < keys.size(); i++) {
+    if (!s.ok()) {
+      throw utils::Exception(std::string("RocksDB Scan: ") + s.ToString());
+    }
+    std::string &data = values[i];
     result.push_back(std::vector<Field>());
     std::vector<Field> &values = result.back();
     if (fields != nullptr) {
@@ -521,9 +536,8 @@ DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &ke
       DeserializeRow(values, data);
       assert(values.size() == static_cast<size_t>(fieldcount_));
     }
-    db_iter->Next();
   }
-  delete db_iter;
+
   return kOK;
 }
 
