@@ -17,6 +17,8 @@
 #include "discrete_generator.h"
 #include "counter_generator.h"
 #include "acknowledged_counter_generator.h"
+#include "random_counter_generator.h"
+#include "random_acknowledged_counter_generator.h"
 #include "utils/properties.h"
 #include "utils/utils.h"
 
@@ -169,6 +171,13 @@ class CoreWorkload {
   static const std::string ZIPFIAN_CONST_PROPERTY;
 
   ///
+  /// Hot data ratio for read/scan operations (0.0-1.0).
+  /// Only query the last hot_data_ratio portion of keys.
+  ///
+  static const std::string HOT_DATA_RATIO_PROPERTY;
+  static const std::string HOT_DATA_RATIO_DEFAULT;
+
+  ///
   /// Initialize the scenario.
   /// Called once, in the main client thread, before any operations are started.
   ///
@@ -182,14 +191,15 @@ class CoreWorkload {
 
   CoreWorkload() :
       field_count_(0), read_all_fields_(false), write_all_fields_(false),
-      field_len_generator_(nullptr), key_chooser_(nullptr), field_chooser_(nullptr),
+      field_len_generator_(nullptr), key_chooser_(nullptr), hot_key_chooser_(nullptr), field_chooser_(nullptr),
       scan_len_chooser_(nullptr), insert_key_sequence_(nullptr),
-      transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), record_count_(0) {
+      transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), random_inserts_(false), record_count_(0), hot_data_ratio_(1.0) {
   }
 
   virtual ~CoreWorkload() {
     delete field_len_generator_;
     delete key_chooser_;
+    delete hot_key_chooser_;
     delete field_chooser_;
     delete scan_len_chooser_;
     delete insert_key_sequence_;
@@ -203,6 +213,7 @@ class CoreWorkload {
   void BuildSingleValue(std::vector<DB::Field> &update);
 
   uint64_t NextTransactionKeyNum();
+  uint64_t NextTransactionKeyNumHot();
   std::string NextFieldName();
 
   DB::Status TransactionRead(DB &db);
@@ -219,13 +230,17 @@ class CoreWorkload {
   Generator<uint64_t> *field_len_generator_;
   DiscreteGenerator<Operation> op_chooser_;
   Generator<uint64_t> *key_chooser_; // transaction key gen
+  Generator<uint64_t> *hot_key_chooser_; // hot data key gen for read/scan
   Generator<uint64_t> *field_chooser_;
   Generator<uint64_t> *scan_len_chooser_;
-  CounterGenerator *insert_key_sequence_; // load insert key gen
-  AcknowledgedCounterGenerator *transaction_insert_key_sequence_; // transaction insert key gen
+  Generator<uint64_t> *insert_key_sequence_;
+  Generator<uint64_t> *transaction_insert_key_sequence_;
   bool ordered_inserts_;
+  bool random_inserts_;
   size_t record_count_;
   int zero_padding_;
+  double hot_data_ratio_;
+  bool enable_lorc_logger_;
 };
 
 } // ycsbc

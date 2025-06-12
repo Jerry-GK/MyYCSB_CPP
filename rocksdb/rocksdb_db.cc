@@ -134,6 +134,9 @@ namespace {
   const std::string PROP_FS_URI = "rocksdb.fs_uri";
   const std::string PROP_FS_URI_DEFAULT = "";
 
+  const std::string PROP_DESERIALIZE_ON_READ = "rocksdb.deserialize_on_read";
+  const std::string PROP_DESERIALIZE_ON_READ_DEFAULT = "false";
+
   static std::shared_ptr<rocksdb::Env> env_guard;
   static std::shared_ptr<rocksdb::Cache> block_cache;
   static std::shared_ptr<rocksdb::Cache> blob_cache;
@@ -215,6 +218,7 @@ void RocksdbDB::Init() {
   fieldcount_ = std::stoi(props.GetProperty(CoreWorkload::FIELD_COUNT_PROPERTY,
                                             CoreWorkload::FIELD_COUNT_DEFAULT));
   disable_wal_ = (props.GetProperty(PROP_DISABLE_WAL, PROP_DISABLE_WAL_DEFAULT) == "true");
+  deserialize_on_read_ = (props.GetProperty(PROP_DESERIALIZE_ON_READ, PROP_DESERIALIZE_ON_READ_DEFAULT) == "true");
 
   ref_cnt_++;
   if (db_) {
@@ -345,7 +349,7 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
 
     size_t range_cache_size = std::stoul(props.GetProperty(PROP_RANGE_CACHE_SIZE, PROP_RANGE_CACHE_SIZE_DEFAULT));
     if (range_cache_size > 0) {
-      range_cache = rocksdb::NewRBTreeSliceVecRangeCache(range_cache_size, false);
+      range_cache = rocksdb::NewRBTreeSliceVecRangeCache(range_cache_size, true);
       opt->range_cache = range_cache;
     }
 
@@ -507,12 +511,17 @@ DB::Status RocksdbDB::ReadSingle(const std::string &table, const std::string &ke
   } else if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Get: ") + s.ToString());
   }
-  if (fields != nullptr) {
-    DeserializeRowFilter(result, data, *fields);
-  } else {
-    DeserializeRow(result, data);
-    assert(result.size() == static_cast<size_t>(fieldcount_));
+  
+  // Only deserialize if enabled
+  if (deserialize_on_read_) {
+    if (fields != nullptr) {
+      DeserializeRowFilter(result, data, *fields);
+    } else {
+      DeserializeRow(result, data);
+      assert(result.size() == static_cast<size_t>(fieldcount_));
+    }
   }
+  
   return kOK;
 }
 
@@ -523,18 +532,20 @@ DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &ke
   std::vector<std::string> values;
   rocksdb::Status s = db_->Scan(rocksdb::ReadOptions(), db_->DefaultColumnFamily(), rocksdb::Slice(key), len, &keys, &values);
 
-  for (size_t i = 0; i < keys.size(); i++) {
-    if (!s.ok()) {
-      throw utils::Exception(std::string("RocksDB Scan: ") + s.ToString());
-    }
-    std::string &data = values[i];
-    result.push_back(std::vector<Field>());
-    std::vector<Field> &values = result.back();
-    if (fields != nullptr) {
-      DeserializeRowFilter(values, data, *fields);
-    } else {
-      DeserializeRow(values, data);
-      assert(values.size() == static_cast<size_t>(fieldcount_));
+  if (deserialize_on_read_) {
+    for (size_t i = 0; i < keys.size(); i++) {
+      if (!s.ok()) {
+        throw utils::Exception(std::string("RocksDB Scan: ") + s.ToString());
+      }
+      std::string &data = values[i];
+      result.push_back(std::vector<Field>());
+      std::vector<Field> &field_value = result.back();
+      if (fields != nullptr) {
+        DeserializeRowFilter(field_value, data, *fields);
+      } else {
+        DeserializeRow(field_value, data);
+        assert(values.size() == static_cast<size_t>(fieldcount_));
+      }
     }
   }
 

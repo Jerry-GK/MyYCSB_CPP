@@ -12,23 +12,34 @@
 # key, and then request a number of records; this works fine even for hashed insertion.
 
 recordcount=4000000
-operationcount=20000
+operationcount=2000
+hot_data_ratio=0.05
+insertorder=random
+# insertorder=hashed
+# insertorder=ordered
+
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 
+zeropadding=24
 fieldcount=1
 fieldlength=1024
 
 readallfields=true
 
+
 readproportion=0
-updateproportion=0
-scanproportion=1.0
+updateproportion=0.8
+scanproportion=0.2
 insertproportion=0.0
 
-requestdistribution=zipfian
+requestdistribution=uniform
 # zipfian_const=2.0
 
-maxscanlength=20
+minscanlength=40000
+maxscanlength=40000
+
+# minscanlength=20
+# maxscanlength=20
 
 scanlengthdistribution=uniform
 

@@ -10,7 +10,8 @@
 
 #---------------------build config-------------------------
 
-CUSTOM_ROCKSDB_PATH ?= /home/gjr/mylibs/lorcdb
+ROCKSDB_BUILD_TYPE ?= release
+CUSTOM_ROCKSDB_PATH ?= /home/gjr/mylibs/lorcdb_${ROCKSDB_BUILD_TYPE}
 
 # Database bindings
 BIND_WIREDTIGER ?= 0

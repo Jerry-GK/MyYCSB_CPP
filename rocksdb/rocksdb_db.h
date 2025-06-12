@@ -92,6 +92,7 @@ class RocksdbDB : public DB {
 
   int fieldcount_;
   bool disable_wal_;
+  bool deserialize_on_read_;
 
   static std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
   static rocksdb::DB *db_;

@@ -14,6 +14,8 @@
 #include "const_generator.h"
 #include "core_workload.h"
 #include "random_byte_generator.h"
+#include "random_counter_generator.h"
+#include "random_acknowledged_counter_generator.h"
 #include "utils/utils.h"
 
 #include <algorithm>
@@ -75,7 +77,7 @@ const string CoreWorkload::REQUEST_DISTRIBUTION_PROPERTY = "requestdistribution"
 const string CoreWorkload::REQUEST_DISTRIBUTION_DEFAULT = "uniform";
 
 const string CoreWorkload::ZERO_PADDING_PROPERTY = "zeropadding";
-const string CoreWorkload::ZERO_PADDING_DEFAULT = "1";
+const string CoreWorkload::ZERO_PADDING_DEFAULT = "24";
 
 const string CoreWorkload::MIN_SCAN_LENGTH_PROPERTY = "minscanlength";
 const string CoreWorkload::MIN_SCAN_LENGTH_DEFAULT = "1";
@@ -99,6 +101,9 @@ const std::string CoreWorkload::FIELD_NAME_PREFIX = "fieldnameprefix";
 const std::string CoreWorkload::FIELD_NAME_PREFIX_DEFAULT = "field";
 
 const std::string CoreWorkload::ZIPFIAN_CONST_PROPERTY = "zipfian_const";
+
+const string CoreWorkload::HOT_DATA_RATIO_PROPERTY = "hot_data_ratio";
+const string CoreWorkload::HOT_DATA_RATIO_DEFAULT = "1.0";
 
 namespace ycsbc {
 
@@ -131,17 +136,30 @@ void CoreWorkload::Init(const utils::Properties &p) {
 
   zero_padding_ = std::stoi(p.GetProperty(ZERO_PADDING_PROPERTY, ZERO_PADDING_DEFAULT));
 
+  hot_data_ratio_ = std::stod(p.GetProperty(HOT_DATA_RATIO_PROPERTY, HOT_DATA_RATIO_DEFAULT));
+  if (hot_data_ratio_ < 0.0 || hot_data_ratio_ > 1.0) {
+    throw utils::Exception("hot_data_ratio must be between 0.0 and 1.0");
+  }
+
   read_all_fields_ = utils::StrToBool(p.GetProperty(READ_ALL_FIELDS_PROPERTY,
                                                     READ_ALL_FIELDS_DEFAULT));
   write_all_fields_ = utils::StrToBool(p.GetProperty(WRITE_ALL_FIELDS_PROPERTY,
                                                      WRITE_ALL_FIELDS_DEFAULT));
 
-  if (p.GetProperty(INSERT_ORDER_PROPERTY, INSERT_ORDER_DEFAULT) == "hashed") {
+  std::string insert_order = p.GetProperty(INSERT_ORDER_PROPERTY, INSERT_ORDER_DEFAULT);
+  
+  if (insert_order == "hashed") {
     ordered_inserts_ = false;
-  } else {
+    random_inserts_ = false;
+  } else if (insert_order == "random") {
+    ordered_inserts_ = false;
+    random_inserts_ = true;
+  } else if (insert_order == "ordered") {
     ordered_inserts_ = true;
+    random_inserts_ = false;
+  } else {
+    throw utils::Exception("Unknown insert order: " + insert_order);
   }
-
 
   if (read_proportion > 0) {
     op_chooser_.AddValue(READ, read_proportion);
@@ -159,8 +177,16 @@ void CoreWorkload::Init(const utils::Properties &p) {
     op_chooser_.AddValue(READMODIFYWRITE, readmodifywrite_proportion);
   }
 
-  insert_key_sequence_ = new CounterGenerator(insert_start);
-  transaction_insert_key_sequence_ = new AcknowledgedCounterGenerator(record_count_);
+  if (random_inserts_) {
+    insert_key_sequence_ = new RandomCounterGenerator(insert_start, record_count_);
+    
+    int op_count = std::stoi(p.GetProperty(OPERATION_COUNT_PROPERTY));
+    int max_new_keys = (int)(op_count * insert_proportion * 2);
+    transaction_insert_key_sequence_ = new RandomAcknowledgedCounterGenerator(record_count_, max_new_keys);
+  } else {
+    insert_key_sequence_ = new CounterGenerator(insert_start);
+    transaction_insert_key_sequence_ = new AcknowledgedCounterGenerator(record_count_);
+  }
 
   if (request_dist == "uniform") {
     key_chooser_ = new UniformGenerator(0, record_count_ - 1);
@@ -180,7 +206,36 @@ void CoreWorkload::Init(const utils::Properties &p) {
       key_chooser_ = new ScrambledZipfianGenerator(record_count_ + new_keys);
     }
   } else if (request_dist == "latest") {
-    key_chooser_ = new SkewedLatestGenerator(*transaction_insert_key_sequence_);
+    if (random_inserts_) {
+      // For random inserts, use uniform distribution as fallback since SkewedLatestGenerator requires CounterGenerator
+      key_chooser_ = new UniformGenerator(0, record_count_ - 1);
+    } else {
+      key_chooser_ = new SkewedLatestGenerator(*static_cast<AcknowledgedCounterGenerator*>(transaction_insert_key_sequence_));
+    }
+  } else {
+    throw utils::Exception("Unknown request distribution: " + request_dist);
+  }
+
+  // Create hot data key chooser for read/scan operations
+  uint64_t hot_data_start = static_cast<uint64_t>(record_count_ * (1.0 - hot_data_ratio_));
+  if (request_dist == "uniform") {
+    hot_key_chooser_ = new UniformGenerator(hot_data_start, record_count_ - 1);
+  } else if (request_dist == "zipfian") {
+    int op_count = std::stoi(p.GetProperty(OPERATION_COUNT_PROPERTY));
+    int new_keys = (int)(op_count * insert_proportion * 2);
+    if (p.ContainsKey(ZIPFIAN_CONST_PROPERTY)) {
+      double zipfian_const = std::stod(p.GetProperty(ZIPFIAN_CONST_PROPERTY));
+      hot_key_chooser_ = new ScrambledZipfianGenerator(hot_data_start, record_count_ + new_keys - 1, zipfian_const);
+    } else {
+      hot_key_chooser_ = new ScrambledZipfianGenerator(hot_data_start, record_count_ + new_keys - 1);
+    }
+  } else if (request_dist == "latest") {
+    if (random_inserts_) {
+      // For random inserts, use uniform distribution as fallback
+      hot_key_chooser_ = new UniformGenerator(hot_data_start, record_count_ - 1);
+    } else {
+      hot_key_chooser_ = new SkewedLatestGenerator(*static_cast<AcknowledgedCounterGenerator*>(transaction_insert_key_sequence_));
+    }
   } else {
     throw utils::Exception("Unknown request distribution: " + request_dist);
   }
@@ -213,7 +268,7 @@ ycsbc::Generator<uint64_t> *CoreWorkload::GetFieldLenGenerator(
 }
 
 std::string CoreWorkload::BuildKeyName(uint64_t key_num) {
-  if (!ordered_inserts_) {
+  if (!ordered_inserts_ && !random_inserts_) {
     key_num = utils::Hash(key_num);
   }
   std::string prekey = "user";
@@ -248,6 +303,14 @@ uint64_t CoreWorkload::NextTransactionKeyNum() {
   uint64_t key_num;
   do {
     key_num = key_chooser_->Next();
+  } while (key_num > transaction_insert_key_sequence_->Last());
+  return key_num;
+}
+
+uint64_t CoreWorkload::NextTransactionKeyNumHot() {
+  uint64_t key_num;
+  do {
+    key_num = hot_key_chooser_->Next();
   } while (key_num > transaction_insert_key_sequence_->Last());
   return key_num;
 }
@@ -288,7 +351,8 @@ bool CoreWorkload::DoTransaction(DB &db) {
 }
 
 DB::Status CoreWorkload::TransactionRead(DB &db) {
-  uint64_t key_num = NextTransactionKeyNum();
+  // uint64_t key_num = NextTransactionKeyNum();
+  uint64_t key_num = NextTransactionKeyNumHot();
   const std::string key = BuildKeyName(key_num);
   std::vector<DB::Field> result;
   if (!read_all_fields()) {
@@ -323,7 +387,8 @@ DB::Status CoreWorkload::TransactionReadModifyWrite(DB &db) {
 }
 
 DB::Status CoreWorkload::TransactionScan(DB &db) {
-  uint64_t key_num = NextTransactionKeyNum();
+  // uint64_t key_num = NextTransactionKeyNum();
+  uint64_t key_num = NextTransactionKeyNumHot();
   const std::string key = BuildKeyName(key_num);
   int len = scan_len_chooser_->Next();
   std::vector<std::vector<DB::Field>> result;
@@ -354,7 +419,14 @@ DB::Status CoreWorkload::TransactionInsert(DB &db) {
   std::vector<DB::Field> values;
   BuildValues(values);
   DB::Status s = db.Insert(table_name_, key, values);
-  transaction_insert_key_sequence_->Acknowledge(key_num);
+  
+  // Only call Acknowledge if it's an AcknowledgedCounterGenerator
+  if (!random_inserts_) {
+    static_cast<AcknowledgedCounterGenerator*>(transaction_insert_key_sequence_)->Acknowledge(key_num);
+  } else {
+    static_cast<RandomAcknowledgedCounterGenerator*>(transaction_insert_key_sequence_)->Acknowledge(key_num);
+  }
+  
   return s;
 }
 

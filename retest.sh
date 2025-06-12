@@ -6,7 +6,7 @@ load=$3
 run=$4
 mode=$5
 
-source_postfix="-source-1KB-4G"
+source_postfix="-source-24B-1KB-4GB-random"
 properties_file="${db}.properties"
 
 if [[ -z "$mode" ]]; then
@@ -46,7 +46,7 @@ for arg in "$@"; do
         load_flag="-load"
     elif [[ "$arg" == "run" ]]; then
         run_flag="-run"
-    elif [[ "$arg" == "build" || "$arg" == "test" || "$arg" == "profile" ]]; then
+    elif [[ "$arg" == "build" || "$arg" == "test" || "$arg" == "profile" || "$arg" == "debug" ]]; then
         mode="$arg"
     elif [[ "$arg" == "lorc" ]]; then
         properties_file="${db}_lorc.properties"
@@ -70,7 +70,9 @@ fi
 
 # Prepare database directory
 sudo rm -rf ./db/ycsb-$db
-sudo cp -r ./db/ycsb-${db}${source_postfix} ./db/ycsb-$db
+if [[ "$load_flag" == "" ]]; then
+    sudo cp -r ./db/ycsb-${db}${source_postfix} ./db/ycsb-$db
+fi
 
 # Execute test
 echo "Running YCSB with: db=$db, operations=$load_flag $run_flag"
@@ -91,4 +93,7 @@ if [[ "$mode" == "profile" ]]; then
     rm -f ./profile/data/${profile_filename}.data
 elif [[ "$mode" == "test" ]]; then
     sudo ./ycsb $load_flag $run_flag -db rocksdb -P workloads/workload_cust -P rocksdb/$properties_file -s
+elif [[ "$mode" == "debug" ]]; then
+    echo "Starting GDB debug session..."
+    sudo gdb --args ./ycsb $load_flag $run_flag -db rocksdb -P workloads/workload_cust -P rocksdb/$properties_file -s
 fi
