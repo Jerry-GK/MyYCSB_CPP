@@ -10,6 +10,7 @@
 
 #include <string>
 #include <vector>
+#include <atomic>
 
 #include "db.h"
 #include "measurements.h"
@@ -20,7 +21,8 @@ namespace ycsbc {
 
 class DBWrapper : public DB {
  public:
-  DBWrapper(DB *db, Measurements *measurements) : db_(db), measurements_(measurements) {}
+  DBWrapper(DB *db, Measurements *measurements, int warmup_ops = 0) 
+    : db_(db), measurements_(measurements), warmup_ops_(warmup_ops), operation_count_(0) {}
   ~DBWrapper() {
     delete db_;
   }
@@ -30,15 +32,28 @@ class DBWrapper : public DB {
   void Cleanup() {
     db_->Cleanup();
   }
+  
+ private:  
+  void ReportOperation(Operation op, uint64_t latency) {
+    int current_op = operation_count_.fetch_add(1, std::memory_order_relaxed);
+    if (current_op < warmup_ops_) {
+      measurements_->ReportWarmup(op);
+    } else {
+      measurements_->Report(op, latency);
+    }
+  }
+  
+ public:
   Status Read(const std::string &table, const std::string &key,
               const std::vector<std::string> *fields, std::vector<Field> &result) {
     timer_.Start();
     Status s = db_->Read(table, key, fields, result);
     uint64_t elapsed = timer_.End();
+    
     if (s == kOK) {
-      measurements_->Report(READ, elapsed);
+      ReportOperation(READ, elapsed);
     } else {
-      measurements_->Report(READ_FAILED, elapsed);
+      ReportOperation(READ_FAILED, elapsed);
     }
     return s;
   }
@@ -47,10 +62,11 @@ class DBWrapper : public DB {
     timer_.Start();
     Status s = db_->Scan(table, key, record_count, fields, result);
     uint64_t elapsed = timer_.End();
+    
     if (s == kOK) {
-      measurements_->Report(SCAN, elapsed);
+      ReportOperation(SCAN, elapsed);
     } else {
-      measurements_->Report(SCAN_FAILED, elapsed);
+      ReportOperation(SCAN_FAILED, elapsed);
     }
     return s;
   }
@@ -58,10 +74,11 @@ class DBWrapper : public DB {
     timer_.Start();
     Status s = db_->Update(table, key, values);
     uint64_t elapsed = timer_.End();
+    
     if (s == kOK) {
-      measurements_->Report(UPDATE, elapsed);
+      ReportOperation(UPDATE, elapsed);
     } else {
-      measurements_->Report(UPDATE_FAILED, elapsed);
+      ReportOperation(UPDATE_FAILED, elapsed);
     }
     return s;
   }
@@ -69,10 +86,11 @@ class DBWrapper : public DB {
     timer_.Start();
     Status s = db_->Insert(table, key, values);
     uint64_t elapsed = timer_.End();
+    
     if (s == kOK) {
-      measurements_->Report(INSERT, elapsed);
+      ReportOperation(INSERT, elapsed);
     } else {
-      measurements_->Report(INSERT_FAILED, elapsed);
+      ReportOperation(INSERT_FAILED, elapsed);
     }
     return s;
   }
@@ -80,10 +98,11 @@ class DBWrapper : public DB {
     timer_.Start();
     Status s = db_->Delete(table, key);
     uint64_t elapsed = timer_.End();
+    
     if (s == kOK) {
-      measurements_->Report(DELETE, elapsed);
+      ReportOperation(DELETE, elapsed);
     } else {
-      measurements_->Report(DELETE_FAILED, elapsed);
+      ReportOperation(DELETE_FAILED, elapsed);
     }
     return s;
   }
@@ -91,6 +110,8 @@ class DBWrapper : public DB {
   DB *db_;
   Measurements *measurements_;
   utils::Timer<uint64_t, std::nano> timer_;
+  int warmup_ops_;
+  std::atomic<int> operation_count_;
 };
 
 } // ycsbc

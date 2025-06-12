@@ -105,6 +105,9 @@ const std::string CoreWorkload::ZIPFIAN_CONST_PROPERTY = "zipfian_const";
 const string CoreWorkload::HOT_DATA_RATIO_PROPERTY = "hot_data_ratio";
 const string CoreWorkload::HOT_DATA_RATIO_DEFAULT = "1.0";
 
+const string CoreWorkload::WARMUP_RATIO_PROPERTY = "warmup_ratio";
+const string CoreWorkload::WARMUP_RATIO_DEFAULT = "0.0";
+
 namespace ycsbc {
 
 void CoreWorkload::Init(const utils::Properties &p) {
@@ -139,6 +142,11 @@ void CoreWorkload::Init(const utils::Properties &p) {
   hot_data_ratio_ = std::stod(p.GetProperty(HOT_DATA_RATIO_PROPERTY, HOT_DATA_RATIO_DEFAULT));
   if (hot_data_ratio_ < 0.0 || hot_data_ratio_ > 1.0) {
     throw utils::Exception("hot_data_ratio must be between 0.0 and 1.0");
+  }
+
+  warmup_ratio_ = std::stod(p.GetProperty(WARMUP_RATIO_PROPERTY, WARMUP_RATIO_DEFAULT));
+  if (warmup_ratio_ < 0.0 || warmup_ratio_ > 1.0) {
+    throw utils::Exception("warmup_ratio must be between 0.0 and 1.0");
   }
 
   read_all_fields_ = utils::StrToBool(p.GetProperty(READ_ALL_FIELDS_PROPERTY,

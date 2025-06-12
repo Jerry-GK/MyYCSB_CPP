@@ -178,6 +178,13 @@ class CoreWorkload {
   static const std::string HOT_DATA_RATIO_DEFAULT;
 
   ///
+  /// Warmup ratio for warmup operations (0.0-1.0).
+  /// The first warmup_ratio * operation_count operations are considered warmup.
+  ///
+  static const std::string WARMUP_RATIO_PROPERTY;
+  static const std::string WARMUP_RATIO_DEFAULT;
+
+  ///
   /// Initialize the scenario.
   /// Called once, in the main client thread, before any operations are started.
   ///
@@ -188,12 +195,13 @@ class CoreWorkload {
 
   bool read_all_fields() const { return read_all_fields_; }
   bool write_all_fields() const { return write_all_fields_; }
+  double warmup_ratio() const { return warmup_ratio_; }
 
   CoreWorkload() :
       field_count_(0), read_all_fields_(false), write_all_fields_(false),
       field_len_generator_(nullptr), key_chooser_(nullptr), hot_key_chooser_(nullptr), field_chooser_(nullptr),
       scan_len_chooser_(nullptr), insert_key_sequence_(nullptr),
-      transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), random_inserts_(false), record_count_(0), hot_data_ratio_(1.0) {
+      transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), random_inserts_(false), record_count_(0), hot_data_ratio_(1.0), warmup_ratio_(0.0) {
   }
 
   virtual ~CoreWorkload() {
@@ -240,6 +248,7 @@ class CoreWorkload {
   size_t record_count_;
   int zero_padding_;
   double hot_data_ratio_;
+  double warmup_ratio_;
   bool enable_lorc_logger_;
 };
 

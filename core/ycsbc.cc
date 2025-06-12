@@ -8,6 +8,7 @@
 
 #include <cstring>
 #include <ctime>
+#include <atomic>
 
 #include <string>
 #include <iostream>
@@ -103,9 +104,19 @@ int main(const int argc, const char *argv[]) {
     exit(1);
   }
 
+  ycsbc::CoreWorkload wl;
+  wl.Init(props);
+
+  // Calculate warmup operations for transaction phase
+  int warmup_ops = 0;
+  if (do_transaction) {
+    const int total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
+    warmup_ops = static_cast<int>(total_ops * wl.warmup_ratio());
+  }
+
   std::vector<ycsbc::DB *> dbs;
   for (int i = 0; i < num_threads; i++) {
-    ycsbc::DB *db = ycsbc::DBFactory::CreateDB(&props, measurements);
+    ycsbc::DB *db = ycsbc::DBFactory::CreateDB(&props, measurements, warmup_ops);
     if (db == nullptr) {
       std::cerr << "Unknown database name " << props["dbname"] << std::endl;
       exit(1);
@@ -113,8 +124,10 @@ int main(const int argc, const char *argv[]) {
     dbs.push_back(db);
   }
 
-  ycsbc::CoreWorkload wl;
-  wl.Init(props);
+  // Set warmup target for measurements
+  if (warmup_ops > 0) {
+    measurements->SetWarmupTarget(warmup_ops);
+  }
 
   // print status periodically
   const bool show_status = (props.GetProperty("status", "false") == "true");
@@ -173,6 +186,7 @@ int main(const int argc, const char *argv[]) {
     std::string rate_file = props.GetProperty("limit.file", "");
 
     const int total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
+    const int non_warmup_ops = total_ops - warmup_ops;
 
     ycsbc::utils::CountDownLatch latch(num_threads);
     ycsbc::utils::Timer<double> timer;
@@ -183,6 +197,12 @@ int main(const int argc, const char *argv[]) {
       status_future = std::async(std::launch::async, StatusThread,
                                  measurements, &latch, status_interval);
     }
+    
+    // Wait for warmup operations to complete before starting measurement timer
+    ycsbc::utils::CountDownLatch warmup_latch(num_threads);
+    std::atomic<bool> measurement_started(false);
+    ycsbc::utils::Timer<double> measurement_timer;
+    
     std::vector<std::future<int>> client_threads;
     std::vector<ycsbc::utils::RateLimiter *> rate_limiters;
     for (int i = 0; i < num_threads; ++i) {
@@ -196,8 +216,10 @@ int main(const int argc, const char *argv[]) {
         rlim = new ycsbc::utils::RateLimiter(per_thread_ops, per_thread_ops);
       }
       rate_limiters.push_back(rlim);
-      client_threads.emplace_back(std::async(std::launch::async, ycsbc::ClientThread, dbs[i], &wl,
-                                             thread_ops, false, !do_load, true, &latch, rlim));
+      client_threads.emplace_back(std::async(std::launch::async, ycsbc::ClientThreadWithWarmup, dbs[i], &wl,
+                                             thread_ops, false, !do_load, true, &latch, &warmup_latch, 
+                                             &measurement_started, &measurement_timer, 
+                                             warmup_ops / num_threads + (i < warmup_ops % num_threads ? 1 : 0), rlim));
     }
 
     std::future<void> rlim_future;
@@ -212,15 +234,19 @@ int main(const int argc, const char *argv[]) {
       assert(n.valid());
       sum += n.get();
     }
-    double runtime = timer.End();
+    double total_runtime = timer.End();
+    double measurement_runtime = measurement_timer.End();
 
     if (show_status) {
       status_future.wait();
     }
 
-    std::cout << "Run runtime(sec): " << runtime << std::endl;
-    std::cout << "Run operations(ops): " << sum << std::endl;
-    std::cout << "Run throughput(ops/sec): " << sum / runtime << std::endl;
+    std::cout << "Run total runtime(sec): " << total_runtime << std::endl;
+    std::cout << "Run measurement runtime(sec): " << measurement_runtime << std::endl;
+    std::cout << "Run total operations(ops): " << sum << std::endl;
+    std::cout << "Run warmup operations(ops): " << warmup_ops << std::endl;
+    std::cout << "Run measured operations(ops): " << non_warmup_ops << std::endl;
+    std::cout << "Run measured throughput(ops/sec): " << non_warmup_ops / measurement_runtime << std::endl;
   }
 
   for (int i = 0; i < num_threads; i++) {

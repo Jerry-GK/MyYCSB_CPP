@@ -24,21 +24,27 @@ namespace ycsbc {
 class Measurements {
  public:
   virtual void Report(Operation op, uint64_t latency) = 0;
+  virtual void ReportWarmup(Operation op) = 0;
   virtual std::string GetStatusMsg() = 0;
   virtual void Reset() = 0;
+  virtual void SetWarmupTarget(int total_warmup_ops) = 0;
 };
 
 class BasicMeasurements : public Measurements {
  public:
   BasicMeasurements();
   void Report(Operation op, uint64_t latency) override;
+  void ReportWarmup(Operation op) override;
   std::string GetStatusMsg() override;
   void Reset() override;
+  void SetWarmupTarget(int total_warmup_ops) override;
  private:
   std::atomic<uint> count_[MAXOPTYPE];
   std::atomic<uint64_t> latency_sum_[MAXOPTYPE];
   std::atomic<uint64_t> latency_min_[MAXOPTYPE];
   std::atomic<uint64_t> latency_max_[MAXOPTYPE];
+  std::atomic<uint> warmup_count_[MAXOPTYPE];
+  std::atomic<int> total_warmup_ops_;
 };
 
 #ifdef HDRMEASUREMENT
@@ -46,10 +52,14 @@ class HdrHistogramMeasurements : public Measurements {
  public:
   HdrHistogramMeasurements();
   void Report(Operation op, uint64_t latency) override;
+  void ReportWarmup(Operation op) override;
   std::string GetStatusMsg() override;
   void Reset() override;
+  void SetWarmupTarget(int total_warmup_ops) override;
  private:
   hdr_histogram *histogram_[MAXOPTYPE];
+  std::atomic<uint> warmup_count_[MAXOPTYPE];
+  std::atomic<int> total_warmup_ops_;
 };
 #endif
 

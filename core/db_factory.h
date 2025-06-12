@@ -22,7 +22,7 @@ class DBFactory {
  public:
   using DBCreator = DB *(*)();
   static bool RegisterDB(std::string db_name, DBCreator db_creator);
-  static DB *CreateDB(utils::Properties *props, Measurements *measurements);
+  static DB *CreateDB(utils::Properties *props, Measurements *measurements, int warmup_ops = 0);
  private:
   static std::map<std::string, DBCreator> &Registry();
 };
