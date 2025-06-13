@@ -87,7 +87,9 @@ inline int ClientThreadWithWarmup(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const 
       if (is_loading) {
         wl->DoInsert(*db);
       } else {
-        wl->DoTransaction(*db);
+        // Check if we are in warmup period
+        bool in_warmup = (i < warmup_ops);
+        wl->DoTransaction(*db, in_warmup);
       }
       ops++;
     }

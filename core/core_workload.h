@@ -192,6 +192,7 @@ class CoreWorkload {
 
   virtual bool DoInsert(DB &db);
   virtual bool DoTransaction(DB &db);
+  virtual bool DoTransaction(DB &db, bool is_warmup);
 
   bool read_all_fields() const { return read_all_fields_; }
   bool write_all_fields() const { return write_all_fields_; }
@@ -237,6 +238,7 @@ class CoreWorkload {
   bool write_all_fields_;
   Generator<uint64_t> *field_len_generator_;
   DiscreteGenerator<Operation> op_chooser_;
+  DiscreteGenerator<Operation> warmup_op_chooser_;
   Generator<uint64_t> *key_chooser_; // transaction key gen
   Generator<uint64_t> *hot_key_chooser_; // hot data key gen for read/scan
   Generator<uint64_t> *field_chooser_;

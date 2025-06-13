@@ -3,7 +3,7 @@
 
 
 recordcount=4000000
-operationcount=10000
+operationcount=400000
 hot_data_ratio=0.05
 warmup_ratio=0.5
 insertorder=random
@@ -20,18 +20,18 @@ readallfields=true
 
 
 readproportion=0
-updateproportion=0.8
-scanproportion=0.2
+updateproportion=0
+scanproportion=1.0
 insertproportion=0.0
 
 requestdistribution=uniform
 # zipfian_const=2.0
 
-minscanlength=40000
-maxscanlength=40000
+# minscanlength=40000
+# maxscanlength=40000
 
-# minscanlength=20
-# maxscanlength=20
+minscanlength=20
+maxscanlength=20
 
 scanlengthdistribution=uniform
 

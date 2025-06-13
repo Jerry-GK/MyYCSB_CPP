@@ -185,6 +185,20 @@ void CoreWorkload::Init(const utils::Properties &p) {
     op_chooser_.AddValue(READMODIFYWRITE, readmodifywrite_proportion);
   }
 
+  // Initialize warmup operation chooser with only READ and SCAN operations
+  if (read_proportion > 0 || scan_proportion > 0) {
+    double total_warmup_proportion = read_proportion + scan_proportion;
+    if (read_proportion > 0) {
+      warmup_op_chooser_.AddValue(READ, read_proportion / total_warmup_proportion);
+    }
+    if (scan_proportion > 0) {
+      warmup_op_chooser_.AddValue(SCAN, scan_proportion / total_warmup_proportion);
+    }
+  } else {
+    // If neither read nor scan is configured, use only READ for warmup
+    warmup_op_chooser_.AddValue(READ, 1.0);
+  }
+
   if (random_inserts_) {
     insert_key_sequence_ = new RandomCounterGenerator(insert_start, record_count_);
     
@@ -354,6 +368,45 @@ bool CoreWorkload::DoTransaction(DB &db) {
       break;
     default:
       throw utils::Exception("Operation request is not recognized!");
+  }
+  return (status == DB::kOK);
+}
+
+bool CoreWorkload::DoTransaction(DB &db, bool is_warmup) {
+  DB::Status status;
+  if (is_warmup) {
+    // During warmup, only perform READ and SCAN operations
+    switch (warmup_op_chooser_.Next()) {
+      case READ:
+        status = TransactionRead(db);
+        break;
+      case SCAN:
+        status = TransactionScan(db);
+        break;
+      default:
+        throw utils::Exception("Warmup operation request is not recognized!");
+    }
+  } else {
+    // Normal operation mode
+    switch (op_chooser_.Next()) {
+      case READ:
+        status = TransactionRead(db);
+        break;
+      case UPDATE:
+        status = TransactionUpdate(db);
+        break;
+      case INSERT:
+        status = TransactionInsert(db);
+        break;
+      case SCAN:
+        status = TransactionScan(db);
+        break;
+      case READMODIFYWRITE:
+        status = TransactionReadModifyWrite(db);
+        break;
+      default:
+        throw utils::Exception("Operation request is not recognized!");
+    }
   }
   return (status == DB::kOK);
 }
