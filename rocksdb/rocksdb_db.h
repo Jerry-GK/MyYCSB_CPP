@@ -73,6 +73,8 @@ class RocksdbDB : public DB {
                     std::vector<std::vector<Field>> &result);
   Status UpdateSingle(const std::string &table, const std::string &key,
                       std::vector<Field> &values);
+  Status UpdateAllFieldsSingle(const std::string &table, const std::string &key,
+                      std::vector<Field> &values);
   Status MergeSingle(const std::string &table, const std::string &key,
                      std::vector<Field> &values);
   Status InsertSingle(const std::string &table, const std::string &key,

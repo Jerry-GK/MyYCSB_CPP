@@ -140,7 +140,7 @@ namespace {
   static std::shared_ptr<rocksdb::Env> env_guard;
   static std::shared_ptr<rocksdb::Cache> block_cache;
   static std::shared_ptr<rocksdb::Cache> blob_cache;
-  static std::shared_ptr<rocksdb::LogicallyOrderedSliceVecRangeCache> range_cache;
+  static std::shared_ptr<rocksdb::LogicallyOrderedRangeCache> range_cache;
 #if ROCKSDB_MAJOR < 8
   static std::shared_ptr<rocksdb::Cache> block_cache_compressed;
 #endif
@@ -349,7 +349,7 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
 
     size_t range_cache_size = std::stoul(props.GetProperty(PROP_RANGE_CACHE_SIZE, PROP_RANGE_CACHE_SIZE_DEFAULT));
     if (range_cache_size > 0) {
-      range_cache = rocksdb::NewRBTreeSliceVecRangeCache(range_cache_size, false);
+      range_cache = rocksdb::NewRBTreeLogicallyOrderedRangeCache(range_cache_size, rocksdb::LorcLogger::Level::WARN, rocksdb::PhysicalRangeType::CONTINUOUS);
       opt->range_cache = range_cache;
     }
 
@@ -554,6 +554,11 @@ DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &ke
 
 DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &key,
                                    std::vector<Field> &values) {
+  // Put directly without GET if write all fields
+  if (values.size() == static_cast<size_t>(fieldcount_)) {
+    return UpdateAllFieldsSingle(table, key, values);
+  }
+
   std::string data;
   rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), key, &data);
   if (s.IsNotFound()) {
@@ -581,6 +586,26 @@ DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &
   data.clear();
   SerializeRow(current_values, data);
   s = db_->Put(wopt, key, data);
+  if (!s.ok()) {
+    throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
+  }
+  return kOK;
+}
+
+DB::Status RocksdbDB::UpdateAllFieldsSingle(const std::string &table, const std::string &key,
+                                   std::vector<Field> &values) {
+  if (values.size() != static_cast<size_t>(fieldcount_)) {
+    assert(false);
+    return kError;
+  }
+
+  std::string data;
+
+  rocksdb::WriteOptions wopt;
+  wopt.disableWAL = disable_wal_;
+
+  SerializeRow(values, data);
+  rocksdb::Status s = db_->Put(wopt, key, data);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
   }
