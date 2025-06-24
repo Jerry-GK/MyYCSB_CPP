@@ -349,7 +349,7 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
 
     size_t range_cache_size = std::stoul(props.GetProperty(PROP_RANGE_CACHE_SIZE, PROP_RANGE_CACHE_SIZE_DEFAULT));
     if (range_cache_size > 0) {
-      range_cache = rocksdb::NewRBTreeLogicallyOrderedRangeCache(range_cache_size, rocksdb::LorcLogger::Level::WARN, rocksdb::PhysicalRangeType::CONTINUOUS);
+      range_cache = rocksdb::NewRBTreeLogicallyOrderedRangeCache(range_cache_size, rocksdb::LorcLogger::Level::WARN, rocksdb::PhysicalRangeType::VEC);
       opt->range_cache = range_cache;
     }
 

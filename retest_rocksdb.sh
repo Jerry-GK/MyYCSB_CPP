@@ -1,13 +1,11 @@
 #!/bin/bash
 
 db=$1
-lorc=$2
-load=$3
-run=$4
-mode=$5
-
-source_postfix="-source-24B-1KB-4GB-random"
-properties_file="${db}.properties"
+# lorc=$2
+# load=$3
+# run=$4
+# distribution=$5
+# mode=$6
 
 if [[ -z "$mode" ]]; then
     mode="test"
@@ -19,19 +17,27 @@ if [[ "$db" != "rocksdb" && "$db" != "blobdb" ]]; then
     exit 1
 fi
 
-# Check and process load parameter
-if [[ "$load" == "load" ]]; then
-    load_flag="-load"
-else
-    load_flag=""
-fi
+lorc=""
+load_flag=""
+run_flag=""
 
-# Check and process run parameter
-if [[ "$run" == "run" ]]; then
-    run_flag="-run"
-else
-    run_flag=""
-fi
+# Check if load or run is specified in any position
+for arg in "${@:2}"; do
+    if [[ "$arg" == "load" ]]; then
+        load_flag="-load"
+    elif [[ "$arg" == "run" ]]; then
+        run_flag="-run"
+    elif [[ "$arg" == "build" || "$arg" == "test" || "$arg" == "profile" || "$arg" == "debug" ]]; then
+        mode="$arg"
+    elif [[ "$arg" == "lorc" ]]; then
+        lorc="lorc"
+    elif [[ "$arg" == "ordered" || "$arg" == "random" || "$arg" == "hashed" ]]; then
+        distribution="$arg"
+    else
+        echo "Error: Invalid argument '$arg'."
+        exit 1
+    fi
+done
 
 # Set properties file based on lorc parameter
 if [[ "$lorc" == "lorc" ]]; then
@@ -40,22 +46,16 @@ else
     properties_file="${db}.properties"
 fi
 
-# Check if load or run is specified in any position
-for arg in "$@"; do
-    if [[ "$arg" == "load" ]]; then
-        load_flag="-load"
-    elif [[ "$arg" == "run" ]]; then
-        run_flag="-run"
-    elif [[ "$arg" == "build" || "$arg" == "test" || "$arg" == "profile" || "$arg" == "debug" ]]; then
-        mode="$arg"
-    elif [[ "$arg" == "lorc" ]]; then
-        properties_file="${db}_lorc.properties"
-    fi
-done
+source_postfix="-source-24B-1KB-4GB-${distribution}"
 
 # Check that at least one of 'load' or 'run' is specified
 if [[ -z "$load_flag" && -z "$run_flag" ]]; then
     echo "Error: At least one of 'load' or 'run' must be specified"
+    exit 1
+fi
+
+if [[ -z "$distribution" ]]; then
+    echo "Error: Distribution must be specified as 'ordered', 'random', or 'hashed'"
     exit 1
 fi
 
@@ -71,11 +71,12 @@ fi
 # Prepare database directory
 sudo rm -rf ./db/ycsb-$db
 if [[ "$load_flag" == "" ]]; then
+    echo "Copying existing database ./db/ycsb-${db}${source_postfix}"
     sudo cp -r ./db/ycsb-${db}${source_postfix} ./db/ycsb-$db
 fi
 
 # Execute test
-echo "Running YCSB with: db=$db, operations=$load_flag $run_flag"
+echo "Running YCSB with: db=$db, distribution=$distribution, lorc=$lorc, operations=$load_flag $run_flag"
 
 if [[ "$mode" == "profile" ]]; then
     # Set perf output filename

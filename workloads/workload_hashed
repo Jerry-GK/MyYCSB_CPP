@@ -4,14 +4,11 @@
 
 recordcount=4000000
 operationcount=4000000
-hot_data_ratio=0.05
-warmup_ratio=0.025
-insertorder=random
-# insertorder=hashed
+hot_data_ratio=0.000125
+warmup_ratio=0.00025
+# insertorder=random
+insertorder=hashed
 # insertorder=ordered
-
-# threadcount=1
-# threadcount=4
 
 workload=com.yahoo.ycsb.workloads.CoreWorkload
 
@@ -22,10 +19,10 @@ fieldlength=1024
 readallfields=true
 writeallfields=true
 
-readproportion=0.1
-updateproportion=0.3
-scanproportion=0.5
-insertproportion=0.1
+readproportion=0
+updateproportion=0.2
+scanproportion=0.8
+insertproportion=0
 
 requestdistribution=uniform
 # zipfian_const=2.0

@@ -11,11 +11,15 @@
 #---------------------build config-------------------------
 
 ROCKSDB_BUILD_TYPE ?= release
+LSBM_BUILD_TYPE ?= release
+
 CUSTOM_ROCKSDB_PATH ?= /home/gjr/mylibs/lorcdb_${ROCKSDB_BUILD_TYPE}
+CUSTOM_LSBM_PATH ?= /home/gjr/mylibs/lsbm_${LSBM_BUILD_TYPE}
 
 # Database bindings
 BIND_WIREDTIGER ?= 0
 BIND_LEVELDB ?= 0
+BIND_LSBM ?= 0
 BIND_ROCKSDB ?= 0
 BIND_LMDB ?= 0
 BIND_SQLITE ?= 0
@@ -47,6 +51,12 @@ endif
 ifeq ($(BIND_LEVELDB), 1)
 	LDFLAGS += -lleveldb
 	SOURCES += $(wildcard leveldb/*.cc)
+endif
+
+ifeq ($(BIND_LSBM), 1)
+	CXXFLAGS += -I$(CUSTOM_LSBM_PATH)/include
+	LDFLAGS += -L$(CUSTOM_LSBM_PATH)/lib -ldb_lsmcb -ldb_common -lport -ltable -lutil -Wl,-rpath,$(CUSTOM_LSBM_PATH)/lib
+	SOURCES += $(wildcard lsbm/*.cc)
 endif
 
 ifeq ($(BIND_ROCKSDB), 1)
