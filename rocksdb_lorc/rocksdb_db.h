@@ -73,6 +73,8 @@ class RocksdbDB : public DB {
                     std::vector<std::vector<Field>> &result);
   Status UpdateSingle(const std::string &table, const std::string &key,
                       std::vector<Field> &values);
+  Status UpdateAllFieldsSingle(const std::string &table, const std::string &key,
+                      std::vector<Field> &values);
   Status MergeSingle(const std::string &table, const std::string &key,
                      std::vector<Field> &values);
   Status InsertSingle(const std::string &table, const std::string &key,
@@ -91,6 +93,8 @@ class RocksdbDB : public DB {
   Status (RocksdbDB::*method_delete_)(const std::string &, const std::string &);
 
   int fieldcount_;
+  bool disable_wal_;
+  bool deserialize_on_read_;
 
   static std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
   static rocksdb::DB *db_;

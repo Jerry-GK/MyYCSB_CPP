@@ -10,10 +10,12 @@
 
 #---------------------build config-------------------------
 
-ROCKSDB_BUILD_TYPE ?= release
+ROCKSDB_LORC_BUILD_TYPE ?= release
+TERARKDB_BUILD_TYPE ?= release
 LSBM_BUILD_TYPE ?= release
 
-CUSTOM_ROCKSDB_PATH ?= /home/gjr/mylibs/lorcdb_${ROCKSDB_BUILD_TYPE}
+CUSTOM_ROCKSDB_LORC_PATH ?= /home/gjr/mylibs/lorcdb_${ROCKSDB_LORC_BUILD_TYPE}
+CUSTOM_TERARKDB_PATH ?= /home/gjr/mylibs/terarkdb_${TERARKDB_BUILD_TYPE}
 CUSTOM_LSBM_PATH ?= /home/gjr/mylibs/lsbm_${LSBM_BUILD_TYPE}
 
 # Database bindings
@@ -21,6 +23,8 @@ BIND_WIREDTIGER ?= 0
 BIND_LEVELDB ?= 0
 BIND_LSBM ?= 0
 BIND_ROCKSDB ?= 0
+BIND_ROCKSDB_LORC ?= 0
+BIND_TERARKDB ?= 0
 BIND_LMDB ?= 0
 BIND_SQLITE ?= 0
 
@@ -53,16 +57,32 @@ ifeq ($(BIND_LEVELDB), 1)
 	SOURCES += $(wildcard leveldb/*.cc)
 endif
 
+ifeq ($(BIND_ROCKSDB), 1)
+	LDFLAGS += -lrocksdb
+	SOURCES += $(wildcard rocksdb/*.cc)
+endif
+
+ifeq ($(BIND_ROCKSDB_LORC), 1)
+	CXXFLAGS += -I$(CUSTOM_ROCKSDB_LORC_PATH)/include
+	LDFLAGS += -L$(CUSTOM_ROCKSDB_LORC_PATH)/lib -lrocksdb -Wl,-rpath,$(CUSTOM_ROCKSDB_LORC_PATH)/lib
+    SOURCES += $(wildcard rocksdb_lorc/*.cc)
+endif
+
+ifeq ($(BIND_TERARKDB), 1)
+	CXXFLAGS += -I$(CUSTOM_TERARKDB_PATH)/include
+# LDFLAGS += -L$(CUSTOM_TERARKDB_PATH)/lib -lterarkdb -Wl,-rpath,$(CUSTOM_TERARKDB_PATH)/lib
+    LDFLAGS += -L$(CUSTOM_TERARKDB_PATH)/lib \
+               -Wl,-Bstatic \
+               -lterarkdb -lbz2 -ljemalloc -llz4 -lsnappy -lz -lzstd \
+               -Wl,-Bdynamic \
+               -pthread -lgomp -lrt -ldl -laio
+	SOURCES += $(wildcard terarkdb/*.cc)
+endif
+
 ifeq ($(BIND_LSBM), 1)
 	CXXFLAGS += -I$(CUSTOM_LSBM_PATH)/include
 	LDFLAGS += -L$(CUSTOM_LSBM_PATH)/lib -ldb_lsmcb -ldb_common -lport -ltable -lutil -Wl,-rpath,$(CUSTOM_LSBM_PATH)/lib
 	SOURCES += $(wildcard lsbm/*.cc)
-endif
-
-ifeq ($(BIND_ROCKSDB), 1)
-	CXXFLAGS += -I$(CUSTOM_ROCKSDB_PATH)/include
-	LDFLAGS += -L$(CUSTOM_ROCKSDB_PATH)/lib -lrocksdb -Wl,-rpath,$(CUSTOM_ROCKSDB_PATH)/lib
-    SOURCES += $(wildcard rocksdb/*.cc)
 endif
 
 ifeq ($(BIND_LMDB), 1)

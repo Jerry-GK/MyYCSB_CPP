@@ -32,6 +32,36 @@ namespace {
   const std::string PROP_DESTROY = "rocksdb.destroy";
   const std::string PROP_DESTROY_DEFAULT = "false";
 
+  const std::string PROP_CREATE_IF_MISSING = "rocksdb.create_if_missing";
+  const std::string PROP_CREATE_IF_MISSING_DEFAULT = "false";
+
+  const std::string PROP_DISABLE_AUTO_COMPACTIONS = "rocksdb.disable_auto_compactions";
+  const std::string PROP_DISABLE_AUTO_COMPACTIONS_DEFAULT = "false";
+
+  const std::string PROP_DISABLE_WAL = "rocksdb.disableWAL";
+  const std::string PROP_DISABLE_WAL_DEFAULT = "true";
+
+  const std::string PROP_ENABLE_BLOB_FILES = "rocksdb.enable_blob_files";
+  const std::string PROP_ENABLE_BLOB_FILES_DEFAULT = "false";
+
+  const std::string PROP_MIN_BLOB_SIZE = "rocksdb.min_blob_size";
+  const std::string PROP_MIN_BLOB_SIZE_DEFAULT = "512";
+
+  const std::string PROP_BLOB_FILE_SIZE = "rocksdb.blob_file_size";
+  const std::string PROP_BLOB_FILE_SIZE_DEFAULT = "67108864";
+
+  const std::string PROP_ENABLE_BLOB_GC = "rocksdb.enable_blob_garbage_collection";
+  const std::string PROP_ENABLE_BLOB_GC_DEFAULT = "false";
+
+  const std::string PROP_BLOB_GC_AGE_CUTOFF = "rocksdb.blob_garbage_collection_age_cutoff";
+  const std::string PROP_BLOB_GC_AGE_CUTOFF_DEFAULT = "0.25";
+
+  const std::string PROP_BLOB_CACHE_SIZE = "rocksdb.blob_cache_size";
+  const std::string PROP_BLOB_CACHE_SIZE_DEFAULT = "0";
+
+  const std::string PROP_RANGE_CACHE_SIZE = "rocksdb.range_cache_size";
+  const std::string PROP_RANGE_CACHE_SIZE_DEFAULT = "0";
+
   const std::string PROP_COMPRESSION = "rocksdb.compression";
   const std::string PROP_COMPRESSION_DEFAULT = "no";
 
@@ -80,7 +110,7 @@ namespace {
   const std::string PROP_USE_MMAP_READ = "rocksdb.allow_mmap_reads";
   const std::string PROP_USE_MMAP_READ_DEFAULT = "false";
 
-  const std::string PROP_CACHE_SIZE = "rocksdb.cache_size";
+  const std::string PROP_CACHE_SIZE = "rocksdb.block_cache_size";
   const std::string PROP_CACHE_SIZE_DEFAULT = "0";
 
   const std::string PROP_COMPRESSED_CACHE_SIZE = "rocksdb.compressed_cache_size";
@@ -104,8 +134,13 @@ namespace {
   const std::string PROP_FS_URI = "rocksdb.fs_uri";
   const std::string PROP_FS_URI_DEFAULT = "";
 
+  const std::string PROP_DESERIALIZE_ON_READ = "rocksdb.deserialize_on_read";
+  const std::string PROP_DESERIALIZE_ON_READ_DEFAULT = "false";
+
   static std::shared_ptr<rocksdb::Env> env_guard;
   static std::shared_ptr<rocksdb::Cache> block_cache;
+  static std::shared_ptr<rocksdb::Cache> blob_cache;
+  static std::shared_ptr<rocksdb::LogicallyOrderedRangeCache> range_cache;
 #if ROCKSDB_MAJOR < 8
   static std::shared_ptr<rocksdb::Cache> block_cache_compressed;
 #endif
@@ -182,6 +217,8 @@ void RocksdbDB::Init() {
   }
   fieldcount_ = std::stoi(props.GetProperty(CoreWorkload::FIELD_COUNT_PROPERTY,
                                             CoreWorkload::FIELD_COUNT_DEFAULT));
+  disable_wal_ = (props.GetProperty(PROP_DISABLE_WAL, PROP_DISABLE_WAL_DEFAULT) == "true");
+  deserialize_on_read_ = (props.GetProperty(PROP_DESERIALIZE_ON_READ, PROP_DESERIALIZE_ON_READ_DEFAULT) == "true");
 
   ref_cnt_++;
   if (db_) {
@@ -194,7 +231,6 @@ void RocksdbDB::Init() {
   }
 
   rocksdb::Options opt;
-  opt.create_if_missing = true;
   std::vector<rocksdb::ColumnFamilyDescriptor> cf_descs;
   GetOptions(props, &opt, &cf_descs);
 #ifdef USE_MERGEUPDATE
@@ -279,6 +315,44 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
       throw utils::Exception("Unknown compression type");
     }
 
+    // Basic options
+    if (props.GetProperty(PROP_CREATE_IF_MISSING, PROP_CREATE_IF_MISSING_DEFAULT) == "true") {
+      opt->create_if_missing = true;
+    }
+    if (props.GetProperty(PROP_DISABLE_AUTO_COMPACTIONS, PROP_DISABLE_AUTO_COMPACTIONS_DEFAULT) == "true") {
+      opt->disable_auto_compactions = true;
+    }
+
+    // Blob storage options
+    if (props.GetProperty(PROP_ENABLE_BLOB_FILES, PROP_ENABLE_BLOB_FILES_DEFAULT) == "true") {
+      opt->enable_blob_files = true;
+      
+      int blob_size = std::stoi(props.GetProperty(PROP_MIN_BLOB_SIZE, PROP_MIN_BLOB_SIZE_DEFAULT));
+      opt->min_blob_size = blob_size;
+      
+      int blob_file_size = std::stoi(props.GetProperty(PROP_BLOB_FILE_SIZE, PROP_BLOB_FILE_SIZE_DEFAULT));
+      opt->blob_file_size = blob_file_size;
+      
+      if (props.GetProperty(PROP_ENABLE_BLOB_GC, PROP_ENABLE_BLOB_GC_DEFAULT) == "true") {
+        opt->enable_blob_garbage_collection = true;
+      }
+      
+      double gc_age_cutoff = std::stod(props.GetProperty(PROP_BLOB_GC_AGE_CUTOFF, PROP_BLOB_GC_AGE_CUTOFF_DEFAULT));
+      opt->blob_garbage_collection_age_cutoff = gc_age_cutoff;
+      
+      size_t blob_cache_size = std::stoul(props.GetProperty(PROP_BLOB_CACHE_SIZE, PROP_BLOB_CACHE_SIZE_DEFAULT));
+      if (blob_cache_size > 0) {
+        blob_cache = rocksdb::NewLRUCache(blob_cache_size);
+        opt->blob_cache = blob_cache;
+      }
+    }
+
+    size_t range_cache_size = std::stoul(props.GetProperty(PROP_RANGE_CACHE_SIZE, PROP_RANGE_CACHE_SIZE_DEFAULT));
+    if (range_cache_size > 0) {
+      range_cache = rocksdb::NewRBTreeLogicallyOrderedRangeCache(range_cache_size, rocksdb::LorcLogger::Level::WARN, rocksdb::PhysicalRangeType::VEC);
+      opt->range_cache = range_cache;
+    }
+
     int val = std::stoi(props.GetProperty(PROP_MAX_BG_JOBS, PROP_MAX_BG_JOBS_DEFAULT));
     if (val != 0) {
       opt->max_background_jobs = val;
@@ -339,9 +413,9 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     }
 
     rocksdb::BlockBasedTableOptions table_options;
-    size_t cache_size = std::stoul(props.GetProperty(PROP_CACHE_SIZE, PROP_CACHE_SIZE_DEFAULT));
-    if (cache_size > 0) {
-      block_cache = rocksdb::NewLRUCache(cache_size);
+    size_t block_cache_size = std::stoul(props.GetProperty(PROP_CACHE_SIZE, PROP_CACHE_SIZE_DEFAULT));
+    if (block_cache_size > 0) {
+      block_cache = rocksdb::NewLRUCache(block_cache_size);
       table_options.block_cache = block_cache;
     }
 #if ROCKSDB_MAJOR < 8
@@ -437,38 +511,54 @@ DB::Status RocksdbDB::ReadSingle(const std::string &table, const std::string &ke
   } else if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Get: ") + s.ToString());
   }
-  if (fields != nullptr) {
-    DeserializeRowFilter(result, data, *fields);
-  } else {
-    DeserializeRow(result, data);
-    assert(result.size() == static_cast<size_t>(fieldcount_));
+  
+  // Only deserialize if enabled
+  if (deserialize_on_read_) {
+    if (fields != nullptr) {
+      DeserializeRowFilter(result, data, *fields);
+    } else {
+      DeserializeRow(result, data);
+      assert(result.size() == static_cast<size_t>(fieldcount_));
+    }
   }
+  
   return kOK;
 }
 
 DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &key, int len,
                                  const std::vector<std::string> *fields,
                                  std::vector<std::vector<Field>> &result) {
-  rocksdb::Iterator *db_iter = db_->NewIterator(rocksdb::ReadOptions());
-  db_iter->Seek(key);
-  for (int i = 0; db_iter->Valid() && i < len; i++) {
-    std::string data = db_iter->value().ToString();
-    result.push_back(std::vector<Field>());
-    std::vector<Field> &values = result.back();
-    if (fields != nullptr) {
-      DeserializeRowFilter(values, data, *fields);
-    } else {
-      DeserializeRow(values, data);
-      assert(values.size() == static_cast<size_t>(fieldcount_));
+  std::vector<std::string> keys;
+  std::vector<std::string> values;
+  rocksdb::Status s = db_->Scan(rocksdb::ReadOptions(), db_->DefaultColumnFamily(), rocksdb::Slice(key), len, &keys, &values);
+
+  if (deserialize_on_read_) {
+    for (size_t i = 0; i < keys.size(); i++) {
+      if (!s.ok()) {
+        throw utils::Exception(std::string("RocksDB Scan: ") + s.ToString());
+      }
+      std::string &data = values[i];
+      result.push_back(std::vector<Field>());
+      std::vector<Field> &field_value = result.back();
+      if (fields != nullptr) {
+        DeserializeRowFilter(field_value, data, *fields);
+      } else {
+        DeserializeRow(field_value, data);
+        assert(values.size() == static_cast<size_t>(fieldcount_));
+      }
     }
-    db_iter->Next();
   }
-  delete db_iter;
+
   return kOK;
 }
 
 DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &key,
                                    std::vector<Field> &values) {
+  // Put directly without GET if write all fields
+  if (values.size() == static_cast<size_t>(fieldcount_)) {
+    return UpdateAllFieldsSingle(table, key, values);
+  }
+
   std::string data;
   rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), key, &data);
   if (s.IsNotFound()) {
@@ -491,10 +581,31 @@ DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &
     assert(found);
   }
   rocksdb::WriteOptions wopt;
+  wopt.disableWAL = disable_wal_;
 
   data.clear();
   SerializeRow(current_values, data);
   s = db_->Put(wopt, key, data);
+  if (!s.ok()) {
+    throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
+  }
+  return kOK;
+}
+
+DB::Status RocksdbDB::UpdateAllFieldsSingle(const std::string &table, const std::string &key,
+                                   std::vector<Field> &values) {
+  if (values.size() != static_cast<size_t>(fieldcount_)) {
+    assert(false);
+    return kError;
+  }
+
+  std::string data;
+
+  rocksdb::WriteOptions wopt;
+  wopt.disableWAL = disable_wal_;
+
+  SerializeRow(values, data);
+  rocksdb::Status s = db_->Put(wopt, key, data);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
   }
@@ -506,6 +617,7 @@ DB::Status RocksdbDB::MergeSingle(const std::string &table, const std::string &k
   std::string data;
   SerializeRow(values, data);
   rocksdb::WriteOptions wopt;
+  wopt.disableWAL = disable_wal_;
   rocksdb::Status s = db_->Merge(wopt, key, data);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Merge: ") + s.ToString());
@@ -518,6 +630,7 @@ DB::Status RocksdbDB::InsertSingle(const std::string &table, const std::string &
   std::string data;
   SerializeRow(values, data);
   rocksdb::WriteOptions wopt;
+  wopt.disableWAL = disable_wal_;
   rocksdb::Status s = db_->Put(wopt, key, data);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
@@ -527,6 +640,7 @@ DB::Status RocksdbDB::InsertSingle(const std::string &table, const std::string &
 
 DB::Status RocksdbDB::DeleteSingle(const std::string &table, const std::string &key) {
   rocksdb::WriteOptions wopt;
+  wopt.disableWAL = disable_wal_;
   rocksdb::Status s = db_->Delete(wopt, key);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Delete: ") + s.ToString());
@@ -538,6 +652,6 @@ DB *NewRocksdbDB() {
   return new RocksdbDB;
 }
 
-const bool registered = DBFactory::RegisterDB("rocksdb", NewRocksdbDB);
+const bool registered = DBFactory::RegisterDB("rocksdb_lorc", NewRocksdbDB);
 
 } // ycsbc

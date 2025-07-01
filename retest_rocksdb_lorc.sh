@@ -7,6 +7,8 @@ db=$1
 # distribution=$5
 # mode=$6
 
+BASE_DB=rocksdb_lorc
+
 if [[ -z "$mode" ]]; then
     mode="test"
 fi
@@ -63,7 +65,7 @@ fi
 if [[ "$mode" == "build" ]]; then
     echo "Building YCSB..."
     sudo make clean
-    sudo make BIND_ROCKSDB=1
+    sudo make BIND_ROCKSDB_LORC=1
     # exit
     exit 0
 fi
@@ -83,7 +85,7 @@ if [[ "$mode" == "profile" ]]; then
     profile_filename="ycsb"
 
     # Use perf for performance sampling (requires root privileges or perf permissions)
-    sudo perf record -F 99 --call-graph dwarf -g --delay 0 -o ./profile/data/${profile_filename}.data ./ycsb $load_flag $run_flag -db rocksdb -P workloads/workload_cust -P rocksdb/$properties_file -s
+    sudo perf record -F 99 --call-graph dwarf -g --delay 0 -o ./profile/data/${profile_filename}.data ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust -P $BASE_DB/$properties_file -s
 
     # Generate flame graph (FlameGraph tool needs to be installed)
     sudo perf script -i ./profile/data/${profile_filename}.data | \
@@ -93,8 +95,8 @@ if [[ "$mode" == "profile" ]]; then
     # Clean up intermediate files
     rm -f ./profile/data/${profile_filename}.data
 elif [[ "$mode" == "test" ]]; then
-    sudo ./ycsb $load_flag $run_flag -db rocksdb -P workloads/workload_cust -P rocksdb/$properties_file -s
+    sudo ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust -P $BASE_DB/$properties_file -s
 elif [[ "$mode" == "debug" ]]; then
     echo "Starting GDB debug session..."
-    sudo gdb --args ./ycsb $load_flag $run_flag -db rocksdb -P workloads/workload_cust -P rocksdb/$properties_file -s
+    sudo gdb --args ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust -P $BASE_DB/$properties_file -s
 fi
