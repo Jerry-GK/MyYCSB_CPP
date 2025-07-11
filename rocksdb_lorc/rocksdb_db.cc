@@ -140,7 +140,7 @@ namespace {
   static std::shared_ptr<rocksdb::Env> env_guard;
   static std::shared_ptr<rocksdb::Cache> block_cache;
   static std::shared_ptr<rocksdb::Cache> blob_cache;
-  static std::shared_ptr<rocksdb::LogicallyOrderedRangeCache> range_cache;
+  static std::shared_ptr<rocksdb::LogicalOrderedRangeCache> range_cache;
 #if ROCKSDB_MAJOR < 8
   static std::shared_ptr<rocksdb::Cache> block_cache_compressed;
 #endif
@@ -349,7 +349,7 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
 
     size_t range_cache_size = std::stoul(props.GetProperty(PROP_RANGE_CACHE_SIZE, PROP_RANGE_CACHE_SIZE_DEFAULT));
     if (range_cache_size > 0) {
-      range_cache = rocksdb::NewRBTreeLogicallyOrderedRangeCache(range_cache_size, rocksdb::LorcLogger::Level::WARN, rocksdb::PhysicalRangeType::VEC);
+      range_cache = rocksdb::NewRBTreeLogicalOrderedRangeCache(range_cache_size, rocksdb::LorcLogger::Level::WARN, rocksdb::PhysicalRangeType::VEC);
       opt->range_cache = range_cache;
     }
 

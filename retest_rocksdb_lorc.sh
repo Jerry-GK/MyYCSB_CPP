@@ -85,7 +85,7 @@ if [[ "$mode" == "profile" ]]; then
     profile_filename="ycsb"
 
     # Use perf for performance sampling (requires root privileges or perf permissions)
-    sudo perf record -F 99 --call-graph dwarf -g --delay 0 -o ./profile/data/${profile_filename}.data ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust -P $BASE_DB/$properties_file -s
+    sudo perf record -F 99 --call-graph dwarf -g --delay 40000 -o ./profile/data/${profile_filename}.data ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust -P $BASE_DB/$properties_file -s
 
     # Generate flame graph (FlameGraph tool needs to be installed)
     sudo perf script -i ./profile/data/${profile_filename}.data | \

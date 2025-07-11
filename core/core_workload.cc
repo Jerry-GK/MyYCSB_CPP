@@ -185,18 +185,9 @@ void CoreWorkload::Init(const utils::Properties &p) {
     op_chooser_.AddValue(READMODIFYWRITE, readmodifywrite_proportion);
   }
 
-  // Initialize warmup operation chooser with only READ and SCAN operations
-  if (read_proportion > 0 || scan_proportion > 0) {
-    double total_warmup_proportion = read_proportion + scan_proportion;
-    if (read_proportion > 0) {
-      warmup_op_chooser_.AddValue(READ, read_proportion / total_warmup_proportion);
-    }
-    if (scan_proportion > 0) {
-      warmup_op_chooser_.AddValue(SCAN, scan_proportion / total_warmup_proportion);
-    }
-  } else {
-    // If neither read nor scan is configured, use only READ for warmup
-    warmup_op_chooser_.AddValue(READ, 1.0);
+  // Initialize warmup operation chooser with only SCAN operations
+  if (scan_proportion > 0) {
+    warmup_op_chooser_.AddValue(SCAN, 1.0);
   }
 
   if (random_inserts_) {
