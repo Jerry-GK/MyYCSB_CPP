@@ -14,11 +14,13 @@ ROCKSDB_LORC_BUILD_TYPE ?= release
 TERARKDB_BUILD_TYPE ?= release
 TOPLINGDB_BUILD_TYPE ?= release
 LSBM_BUILD_TYPE ?= release
+TITAN_BUILD_TYPE ?= release
 
 CUSTOM_ROCKSDB_LORC_PATH ?= /home/gjr/mylibs/lorcdb_${ROCKSDB_LORC_BUILD_TYPE}
 CUSTOM_TERARKDB_PATH ?= /home/gjr/mylibs/terarkdb_${TERARKDB_BUILD_TYPE}
 CUSTOM_TOPLINGDB_PATH ?= /home/gjr/mylibs/toplingdb_${TOPLINGDB_BUILD_TYPE}
-CUSTOM_LSBM_PATH ?= /home/gjr/mylibs/lsbm_${LSBM_BUILD_TYPE}
+CUSTOM_TITAN_PATH ?= /home/gjr/mylibs/titan_${TITAN_BUILD_TYPE}
+
 
 # Database bindings
 BIND_WIREDTIGER ?= 0
@@ -26,6 +28,7 @@ BIND_LEVELDB ?= 0
 BIND_LSBM ?= 0
 BIND_ROCKSDB ?= 0
 BIND_ROCKSDB_LORC ?= 0
+BIND_TITAN ?= 0
 BIND_TERARKDB ?= 0
 BIND_TOPLINGDB ?= 0
 BIND_LMDB ?= 0
@@ -71,6 +74,16 @@ ifeq ($(BIND_ROCKSDB_LORC), 1)
     SOURCES += $(wildcard rocksdb_lorc/*.cc)
 endif
 
+ifeq ($(BIND_TITAN), 1)
+	CXXFLAGS += -I$(CUSTOM_TITAN_PATH)/include
+    LDFLAGS += -L$(CUSTOM_TITAN_PATH)/lib \
+               -Wl,-Bstatic \
+               -ltitan -lrocksdb -lbz2 -llz4 -lsnappy -lz -lzstd \
+               -Wl,-Bdynamic \
+               -pthread -lgomp -lrt -ldl -laio -luring
+	SOURCES += $(wildcard titan/*.cc)
+endif
+
 ifeq ($(BIND_TERARKDB), 1)
 	CXXFLAGS += -I$(CUSTOM_TERARKDB_PATH)/include
 # LDFLAGS += -L$(CUSTOM_TERARKDB_PATH)/lib -lterarkdb -Wl,-rpath,$(CUSTOM_TERARKDB_PATH)/lib
@@ -85,8 +98,8 @@ endif
 ifeq ($(BIND_TOPLINGDB), 1)
 	CXXFLAGS += -I$(CUSTOM_TOPLINGDB_PATH)/include
     LDFLAGS += -L$(CUSTOM_TOPLINGDB_PATH)/lib \
-               -Wl,-Bstatic \
-               -lrocksdb -lbz2 -llz4 -lsnappy -lz -lzstd \
+               -Wl,-Bdynamic \
+               -ltoplingdb -lbz2 -llz4 -lsnappy -lz -lzstd \
                -Wl,-Bdynamic \
                -pthread -lgomp -lrt -ldl -laio
 	SOURCES += $(wildcard toplingdb/*.cc)
