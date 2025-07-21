@@ -12,10 +12,12 @@
 
 ROCKSDB_LORC_BUILD_TYPE ?= release
 TERARKDB_BUILD_TYPE ?= release
+TOPLINGDB_BUILD_TYPE ?= release
 LSBM_BUILD_TYPE ?= release
 
 CUSTOM_ROCKSDB_LORC_PATH ?= /home/gjr/mylibs/lorcdb_${ROCKSDB_LORC_BUILD_TYPE}
 CUSTOM_TERARKDB_PATH ?= /home/gjr/mylibs/terarkdb_${TERARKDB_BUILD_TYPE}
+CUSTOM_TOPLINGDB_PATH ?= /home/gjr/mylibs/toplingdb_${TOPLINGDB_BUILD_TYPE}
 CUSTOM_LSBM_PATH ?= /home/gjr/mylibs/lsbm_${LSBM_BUILD_TYPE}
 
 # Database bindings
@@ -25,6 +27,7 @@ BIND_LSBM ?= 0
 BIND_ROCKSDB ?= 0
 BIND_ROCKSDB_LORC ?= 0
 BIND_TERARKDB ?= 0
+BIND_TOPLINGDB ?= 0
 BIND_LMDB ?= 0
 BIND_SQLITE ?= 0
 
@@ -73,10 +76,20 @@ ifeq ($(BIND_TERARKDB), 1)
 # LDFLAGS += -L$(CUSTOM_TERARKDB_PATH)/lib -lterarkdb -Wl,-rpath,$(CUSTOM_TERARKDB_PATH)/lib
     LDFLAGS += -L$(CUSTOM_TERARKDB_PATH)/lib \
                -Wl,-Bstatic \
-               -lterarkdb -lbz2 -ljemalloc -llz4 -lsnappy -lz -lzstd \
+               -lterarkdb -lbz2 -llz4 -lsnappy -lz -lzstd \
                -Wl,-Bdynamic \
                -pthread -lgomp -lrt -ldl -laio
 	SOURCES += $(wildcard terarkdb/*.cc)
+endif
+
+ifeq ($(BIND_TOPLINGDB), 1)
+	CXXFLAGS += -I$(CUSTOM_TOPLINGDB_PATH)/include
+    LDFLAGS += -L$(CUSTOM_TOPLINGDB_PATH)/lib \
+               -Wl,-Bstatic \
+               -lrocksdb -lbz2 -llz4 -lsnappy -lz -lzstd \
+               -Wl,-Bdynamic \
+               -pthread -lgomp -lrt -ldl -laio
+	SOURCES += $(wildcard toplingdb/*.cc)
 endif
 
 ifeq ($(BIND_LSBM), 1)

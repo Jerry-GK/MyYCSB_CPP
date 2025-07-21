@@ -6,7 +6,7 @@
 //  Modifications Copyright 2023 Chengye YU <yuchengye2013 AT outlook.com>.
 //
 
-#include "terarkdb_db.h"
+#include "toplingdb_db.h"
 
 #include "core/core_workload.h"
 #include "core/db_factory.h"
@@ -21,133 +21,136 @@
 #include <rocksdb/table.h>
 
 namespace {
-  const std::string PROP_NAME = "terarkdb.dbname";
+  const std::string PROP_NAME = "toplingdb.dbname";
   const std::string PROP_NAME_DEFAULT = "";
 
-  const std::string PROP_FORMAT = "terarkdb.format";
+  const std::string PROP_FORMAT = "toplingdb.format";
   const std::string PROP_FORMAT_DEFAULT = "single";
 
-  const std::string PROP_MERGEUPDATE = "terarkdb.mergeupdate";
+  const std::string PROP_MERGEUPDATE = "toplingdb.mergeupdate";
   const std::string PROP_MERGEUPDATE_DEFAULT = "false";
 
-  const std::string PROP_DESTROY = "terarkdb.destroy";
+  const std::string PROP_DESTROY = "toplingdb.destroy";
   const std::string PROP_DESTROY_DEFAULT = "false";
 
-  const std::string PROP_CREATE_IF_MISSING = "terarkdb.create_if_missing";
+  const std::string PROP_CREATE_IF_MISSING = "toplingdb.create_if_missing";
   const std::string PROP_CREATE_IF_MISSING_DEFAULT = "false";
 
-  const std::string PROP_DISABLE_AUTO_COMPACTIONS = "terarkdb.disable_auto_compactions";
+  const std::string PROP_DISABLE_AUTO_COMPACTIONS = "toplingdb.disable_auto_compactions";
   const std::string PROP_DISABLE_AUTO_COMPACTIONS_DEFAULT = "false";
 
-  const std::string PROP_DISABLE_WAL = "terarkdb.disableWAL";
+  const std::string PROP_DISABLE_WAL = "toplingdb.disableWAL";
   const std::string PROP_DISABLE_WAL_DEFAULT = "true";
 
-  const std::string PROP_BLOB_SIZE = "terarkdb.blob_size";
-  const std::string PROP_BLOB_SIZE_DEFAULT = "512";
+  const std::string PROP_ENABLE_BLOB_GARAGE_COLLECTION = "toplingdb.enable_blob_garbage_collection";
+  const std::string PROP_ENABLE_BLOB_GARAGE_COLLECTION_DEFAULT = "false";
 
-  const std::string PROP_TARGET_BLOB_FILE_SIZE = "terarkdb.target_blob_file_size";
-  const std::string PROP_TARGET_BLOB_FILE_SIZE_DEFAULT = "67108864";
+  const std::string PROP_MIN_BLOB_SIZE = "toplingdb.min_blob_size";
+  const std::string PROP_MIN_BLOB_SIZE_DEFAULT = "512";
 
-  const std::string PROP_BLOB_GC_RATIO = "terarkdb.blob_gc_ratio";
-  const std::string PROP_BLOB_GC_RATIO_DEFAULT = "0.25";
+  const std::string PROP_BLOB_FILE_SIZE = "toplingdb.blob_file_size";
+  const std::string PROP_BLOB_FILE_SIZE_DEFAULT = "67108864";
 
-  const std::string PROP_COMPRESSION = "terarkdb.compression";
+  const std::string PROP_BLOB_GC_AGE_CUTOFF = "toplingdb.blob_gc_age_cutoff";
+  const std::string PROP_BLOB_GC_AGE_CUTOFF_DEFAULT = "0.25";
+
+  const std::string PROP_COMPRESSION = "toplingdb.compression";
   const std::string PROP_COMPRESSION_DEFAULT = "no";
 
-  const std::string PROP_MAX_BG_JOBS = "terarkdb.max_background_jobs";
+  const std::string PROP_MAX_BG_JOBS = "toplingdb.max_background_jobs";
   const std::string PROP_MAX_BG_JOBS_DEFAULT = "0";
 
-  const std::string PROP_TARGET_FILE_SIZE_BASE = "terarkdb.target_file_size_base";
+  const std::string PROP_TARGET_FILE_SIZE_BASE = "toplingdb.target_file_size_base";
   const std::string PROP_TARGET_FILE_SIZE_BASE_DEFAULT = "0";
 
-  const std::string PROP_TARGET_FILE_SIZE_MULT = "terarkdb.target_file_size_multiplier";
+  const std::string PROP_TARGET_FILE_SIZE_MULT = "toplingdb.target_file_size_multiplier";
   const std::string PROP_TARGET_FILE_SIZE_MULT_DEFAULT = "0";
 
-  const std::string PROP_MAX_BYTES_FOR_LEVEL_BASE = "terarkdb.max_bytes_for_level_base";
+  const std::string PROP_MAX_BYTES_FOR_LEVEL_BASE = "toplingdb.max_bytes_for_level_base";
   const std::string PROP_MAX_BYTES_FOR_LEVEL_BASE_DEFAULT = "0";
 
-  const std::string PROP_WRITE_BUFFER_SIZE = "terarkdb.write_buffer_size";
+  const std::string PROP_WRITE_BUFFER_SIZE = "toplingdb.write_buffer_size";
   const std::string PROP_WRITE_BUFFER_SIZE_DEFAULT = "0";
 
-  const std::string PROP_MAX_WRITE_BUFFER = "terarkdb.max_write_buffer_number";
+  const std::string PROP_MAX_WRITE_BUFFER = "toplingdb.max_write_buffer_number";
   const std::string PROP_MAX_WRITE_BUFFER_DEFAULT = "0";
 
-  const std::string PROP_COMPACTION_PRI = "terarkdb.compaction_pri";
+  const std::string PROP_COMPACTION_PRI = "toplingdb.compaction_pri";
   const std::string PROP_COMPACTION_PRI_DEFAULT = "-1";
 
-  const std::string PROP_MAX_OPEN_FILES = "terarkdb.max_open_files";
+  const std::string PROP_MAX_OPEN_FILES = "toplingdb.max_open_files";
   const std::string PROP_MAX_OPEN_FILES_DEFAULT = "-1";
 
-  const std::string PROP_L0_COMPACTION_TRIGGER = "terarkdb.level0_file_num_compaction_trigger";
+  const std::string PROP_L0_COMPACTION_TRIGGER = "toplingdb.level0_file_num_compaction_trigger";
   const std::string PROP_L0_COMPACTION_TRIGGER_DEFAULT = "0";
 
-  const std::string PROP_L0_SLOWDOWN_TRIGGER = "terarkdb.level0_slowdown_writes_trigger";
+  const std::string PROP_L0_SLOWDOWN_TRIGGER = "toplingdb.level0_slowdown_writes_trigger";
   const std::string PROP_L0_SLOWDOWN_TRIGGER_DEFAULT = "0";
 
-  const std::string PROP_L0_STOP_TRIGGER = "terarkdb.level0_stop_writes_trigger";
+  const std::string PROP_L0_STOP_TRIGGER = "toplingdb.level0_stop_writes_trigger";
   const std::string PROP_L0_STOP_TRIGGER_DEFAULT = "0";
 
-  const std::string PROP_USE_DIRECT_WRITE = "terarkdb.use_direct_io_for_flush_compaction";
+  const std::string PROP_USE_DIRECT_WRITE = "toplingdb.use_direct_io_for_flush_compaction";
   const std::string PROP_USE_DIRECT_WRITE_DEFAULT = "false";
 
-  const std::string PROP_USE_DIRECT_READ = "terarkdb.use_direct_reads";
+  const std::string PROP_USE_DIRECT_READ = "toplingdb.use_direct_reads";
   const std::string PROP_USE_DIRECT_READ_DEFAULT = "false";
 
-  const std::string PROP_USE_MMAP_WRITE = "terarkdb.allow_mmap_writes";
+  const std::string PROP_USE_MMAP_WRITE = "toplingdb.allow_mmap_writes";
   const std::string PROP_USE_MMAP_WRITE_DEFAULT = "false";
 
-  const std::string PROP_USE_MMAP_READ = "terarkdb.allow_mmap_reads";
+  const std::string PROP_USE_MMAP_READ = "toplingdb.allow_mmap_reads";
   const std::string PROP_USE_MMAP_READ_DEFAULT = "false";
 
-  const std::string PROP_CACHE_SIZE = "terarkdb.cache_size";
+  const std::string PROP_CACHE_SIZE = "toplingdb.cache_size";
   const std::string PROP_CACHE_SIZE_DEFAULT = "0";
 
-  const std::string PROP_COMPRESSED_CACHE_SIZE = "terarkdb.compressed_cache_size";
+  const std::string PROP_COMPRESSED_CACHE_SIZE = "toplingdb.compressed_cache_size";
   const std::string PROP_COMPRESSED_CACHE_SIZE_DEFAULT = "0";
 
-  const std::string PROP_BLOOM_BITS = "terarkdb.bloom_bits";
+  const std::string PROP_BLOOM_BITS = "toplingdb.bloom_bits";
   const std::string PROP_BLOOM_BITS_DEFAULT = "0";
 
-  const std::string PROP_INCREASE_PARALLELISM = "terarkdb.increase_parallelism";
+  const std::string PROP_INCREASE_PARALLELISM = "toplingdb.increase_parallelism";
   const std::string PROP_INCREASE_PARALLELISM_DEFAULT = "false";
 
-  const std::string PROP_OPTIMIZE_LEVELCOMP = "terarkdb.optimize_level_style_compaction";
+  const std::string PROP_OPTIMIZE_LEVELCOMP = "toplingdb.optimize_level_style_compaction";
   const std::string PROP_OPTIMIZE_LEVELCOMP_DEFAULT = "false";
 
-  const std::string PROP_OPTIONS_FILE = "terarkdb.optionsfile";
+  const std::string PROP_OPTIONS_FILE = "toplingdb.optionsfile";
   const std::string PROP_OPTIONS_FILE_DEFAULT = "";
 
-  const std::string PROP_ENV_URI = "terarkdb.env_uri";
+  const std::string PROP_ENV_URI = "toplingdb.env_uri";
   const std::string PROP_ENV_URI_DEFAULT = "";
 
-  const std::string PROP_FS_URI = "terarkdb.fs_uri";
+  const std::string PROP_FS_URI = "toplingdb.fs_uri";
   const std::string PROP_FS_URI_DEFAULT = "";
 
-  const std::string PROP_DESERIALIZE_ON_READ = "terarkdb.deserialize_on_read";
+  const std::string PROP_DESERIALIZE_ON_READ = "toplingdb.deserialize_on_read";
   const std::string PROP_DESERIALIZE_ON_READ_DEFAULT = "false";
 
-  static std::shared_ptr<terarkdb::Env> env_guard;
-  static std::shared_ptr<terarkdb::Cache> block_cache;
+  static std::shared_ptr<rocksdb::Env> env_guard;
+  static std::shared_ptr<rocksdb::Cache> block_cache;
 #if ROCKSDB_MAJOR < 8
-  static std::shared_ptr<terarkdb::Cache> block_cache_compressed;
+  static std::shared_ptr<rocksdb::Cache> block_cache_compressed;
 #endif
 } // anonymous
 
 namespace ycsbc {
 
-std::vector<terarkdb::ColumnFamilyHandle *> RocksdbDB::cf_handles_;
-terarkdb::DB *RocksdbDB::db_ = nullptr;
+std::vector<rocksdb::ColumnFamilyHandle *> RocksdbDB::cf_handles_;
+rocksdb::DB *RocksdbDB::db_ = nullptr;
 int RocksdbDB::ref_cnt_ = 0;
 std::mutex RocksdbDB::mu_;
 
 void RocksdbDB::Init() {
 // merge operator disabled by default due to link error
 #ifdef USE_MERGEUPDATE
-  class YCSBUpdateMerge : public terarkdb::AssociativeMergeOperator {
+  class YCSBUpdateMerge : public rocksdb::AssociativeMergeOperator {
    public:
-    virtual bool Merge(const terarkdb::Slice &key, const terarkdb::Slice *existing_value,
-                       const terarkdb::Slice &value, std::string *new_value,
-                       terarkdb::Logger *logger) const override {
+    virtual bool Merge(const rocksdb::Slice &key, const rocksdb::Slice *existing_value,
+                       const rocksdb::Slice &value, std::string *new_value,
+                       rocksdb::Logger *logger) const override {
       assert(existing_value);
 
       std::vector<Field> values;
@@ -217,25 +220,25 @@ void RocksdbDB::Init() {
     throw utils::Exception("RocksDB db path is missing");
   }
 
-  terarkdb::Options opt;
+  rocksdb::Options opt;
   opt.create_if_missing = true;
-  std::vector<terarkdb::ColumnFamilyDescriptor> cf_descs;
+  std::vector<rocksdb::ColumnFamilyDescriptor> cf_descs;
   GetOptions(props, &opt, &cf_descs);
 #ifdef USE_MERGEUPDATE
   opt.merge_operator.reset(new YCSBUpdateMerge);
 #endif
 
-  terarkdb::Status s;
+  rocksdb::Status s;
   if (props.GetProperty(PROP_DESTROY, PROP_DESTROY_DEFAULT) == "true") {
-    s = terarkdb::DestroyDB(db_path, opt);
+    s = rocksdb::DestroyDB(db_path, opt);
     if (!s.ok()) {
       throw utils::Exception(std::string("RocksDB DestroyDB: ") + s.ToString());
     }
   }
   if (cf_descs.empty()) {
-    s = terarkdb::DB::Open(opt, db_path, &db_);
+    s = rocksdb::DB::Open(opt, db_path, &db_);
   } else {
-    s = terarkdb::DB::Open(opt, db_path, cf_descs, &cf_handles_, &db_);
+    s = rocksdb::DB::Open(opt, db_path, cf_descs, &cf_handles_, &db_);
   }
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Open: ") + s.ToString());
@@ -256,14 +259,14 @@ void RocksdbDB::Cleanup() {
   delete db_;
 }
 
-void RocksdbDB::GetOptions(const utils::Properties &props, terarkdb::Options *opt,
-                           std::vector<terarkdb::ColumnFamilyDescriptor> *cf_descs) {
-  // terarkdb does NOT support terarkdb::Env::CreateFromUri
+void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt,
+                           std::vector<rocksdb::ColumnFamilyDescriptor> *cf_descs) {
+  // terarkdb does NOT support rocksdb::Env::CreateFromUri
   // std::string env_uri = props.GetProperty(PROP_ENV_URI, PROP_ENV_URI_DEFAULT);
   // std::string fs_uri = props.GetProperty(PROP_FS_URI, PROP_FS_URI_DEFAULT);
-  // terarkdb::Env* env =  terarkdb::Env::Default();;
+  // rocksdb::Env* env =  rocksdb::Env::Default();;
   // if (!env_uri.empty() || !fs_uri.empty()) {
-  //   terarkdb::Status s = terarkdb::Env::CreateFromUri(terarkdb::ConfigOptions(),
+  //   rocksdb::Status s = rocksdb::Env::CreateFromUri(rocksdb::ConfigOptions(),
   //                                                   env_uri, fs_uri, &env, &env_guard);
   //   if (!s.ok()) {
   //     throw utils::Exception(std::string("RocksDB CreateFromUri: ") + s.ToString());
@@ -273,11 +276,11 @@ void RocksdbDB::GetOptions(const utils::Properties &props, terarkdb::Options *op
 
   const std::string options_file = props.GetProperty(PROP_OPTIONS_FILE, PROP_OPTIONS_FILE_DEFAULT);
   if (options_file != "") {
-    // terarkdb::ConfigOptions config_options;
+    // rocksdb::ConfigOptions config_options;
     // config_options.ignore_unknown_options = false;
     // config_options.input_strings_escaped = true;
     // // config_options.env = env;
-    // terarkdb::Status s = terarkdb::LoadOptionsFromFile(config_options, options_file, opt, cf_descs);
+    // rocksdb::Status s = rocksdb::LoadOptionsFromFile(config_options, options_file, opt, cf_descs);
     // if (!s.ok()) {
     //   throw utils::Exception(std::string("RocksDB LoadOptionsFromFile: ") + s.ToString());
     // }
@@ -288,21 +291,21 @@ void RocksdbDB::GetOptions(const utils::Properties &props, terarkdb::Options *op
     const std::string compression_type = props.GetProperty(PROP_COMPRESSION,
                                                            PROP_COMPRESSION_DEFAULT);
     if (compression_type == "no") {
-      opt->compression = terarkdb::kNoCompression;
+      opt->compression = rocksdb::kNoCompression;
     } else if (compression_type == "snappy") {
-      opt->compression = terarkdb::kSnappyCompression;
+      opt->compression = rocksdb::kSnappyCompression;
     } else if (compression_type == "zlib") {
-      opt->compression = terarkdb::kZlibCompression;
+      opt->compression = rocksdb::kZlibCompression;
     } else if (compression_type == "bzip2") {
-      opt->compression = terarkdb::kBZip2Compression;
+      opt->compression = rocksdb::kBZip2Compression;
     } else if (compression_type == "lz4") {
-      opt->compression = terarkdb::kLZ4Compression;
+      opt->compression = rocksdb::kLZ4Compression;
     } else if (compression_type == "lz4hc") {
-      opt->compression = terarkdb::kLZ4HCCompression;
+      opt->compression = rocksdb::kLZ4HCCompression;
     } else if (compression_type == "xpress") {
-      opt->compression = terarkdb::kXpressCompression;
+      opt->compression = rocksdb::kXpressCompression;
     } else if (compression_type == "zstd") {
-      opt->compression = terarkdb::kZSTD;
+      opt->compression = rocksdb::kZSTD;
     } else {
       throw utils::Exception("Unknown compression type");
     }
@@ -316,14 +319,18 @@ void RocksdbDB::GetOptions(const utils::Properties &props, terarkdb::Options *op
     }
 
     // Blob storage options
-    int blob_size = std::stoi(props.GetProperty(PROP_BLOB_SIZE, PROP_BLOB_SIZE_DEFAULT));
-    opt->blob_size = blob_size;
-    
-    int target_blob_file_size = std::stoi(props.GetProperty(PROP_TARGET_BLOB_FILE_SIZE, PROP_TARGET_BLOB_FILE_SIZE_DEFAULT));
-    opt->target_blob_file_size = target_blob_file_size;
-    
-    double blob_gc_ratio = std::stod(props.GetProperty(PROP_BLOB_GC_RATIO, PROP_BLOB_GC_RATIO_DEFAULT));
-    opt->blob_gc_ratio = blob_gc_ratio;
+    // if (props.GetProperty(PROP_ENABLE_BLOB_GARAGE_COLLECTION, PROP_ENABLE_BLOB_GARAGE_COLLECTION_DEFAULT) == "true") {
+    //   opt->enable_blob_garbage_collection = true;
+    // }
+
+    // int min_blob_size = std::stoi(props.GetProperty(PROP_MIN_BLOB_SIZE, PROP_MIN_BLOB_SIZE_DEFAULT));
+    // opt->min_blob_size = min_blob_size;
+
+    // int blob_file_size = std::stoi(props.GetProperty(PROP_BLOB_FILE_SIZE, PROP_BLOB_FILE_SIZE_DEFAULT));
+    // opt->blob_file_size = blob_file_size;
+
+    // double blob_garbage_collection_age_cutoff = std::stod(props.GetProperty(PROP_BLOB_GC_AGE_CUTOFF, PROP_BLOB_GC_AGE_CUTOFF_DEFAULT));
+    // opt->blob_garbage_collection_age_cutoff = blob_garbage_collection_age_cutoff;
 
     int val = std::stoi(props.GetProperty(PROP_MAX_BG_JOBS, PROP_MAX_BG_JOBS_DEFAULT));
     if (val != 0) {
@@ -351,7 +358,7 @@ void RocksdbDB::GetOptions(const utils::Properties &props, terarkdb::Options *op
     }
     val = std::stoi(props.GetProperty(PROP_COMPACTION_PRI, PROP_COMPACTION_PRI_DEFAULT));
     if (val != -1) {
-      opt->compaction_pri = static_cast<terarkdb::CompactionPri>(val);
+      opt->compaction_pri = static_cast<rocksdb::CompactionPri>(val);
     }
     val = std::stoi(props.GetProperty(PROP_MAX_OPEN_FILES, PROP_MAX_OPEN_FILES_DEFAULT));
     if (val != 0) {
@@ -384,10 +391,10 @@ void RocksdbDB::GetOptions(const utils::Properties &props, terarkdb::Options *op
       opt->allow_mmap_reads = true;
     }
 
-    terarkdb::BlockBasedTableOptions table_options;
+    rocksdb::BlockBasedTableOptions table_options;
     size_t cache_size = std::stoul(props.GetProperty(PROP_CACHE_SIZE, PROP_CACHE_SIZE_DEFAULT));
     if (cache_size > 0) {
-      block_cache = terarkdb::NewLRUCache(cache_size);
+      block_cache = rocksdb::NewLRUCache(cache_size);
       table_options.block_cache = block_cache;
     } else {
       table_options.no_block_cache = true;
@@ -396,15 +403,15 @@ void RocksdbDB::GetOptions(const utils::Properties &props, terarkdb::Options *op
     size_t compressed_cache_size = std::stoul(props.GetProperty(PROP_COMPRESSED_CACHE_SIZE,
                                                                 PROP_COMPRESSED_CACHE_SIZE_DEFAULT));
     if (compressed_cache_size > 0) {
-      block_cache_compressed = terarkdb::NewLRUCache(compressed_cache_size);
+      block_cache_compressed = rocksdb::NewLRUCache(compressed_cache_size);
       table_options.block_cache_compressed = block_cache_compressed;
     }
 #endif
     int bloom_bits = std::stoul(props.GetProperty(PROP_BLOOM_BITS, PROP_BLOOM_BITS_DEFAULT));
     if (bloom_bits > 0) {
-      table_options.filter_policy.reset(terarkdb::NewBloomFilterPolicy(bloom_bits));
+      table_options.filter_policy.reset(rocksdb::NewBloomFilterPolicy(bloom_bits));
     }
-    opt->table_factory.reset(terarkdb::NewBlockBasedTableFactory(table_options));
+    opt->table_factory.reset(rocksdb::NewBlockBasedTableFactory(table_options));
 
     if (props.GetProperty(PROP_INCREASE_PARALLELISM, PROP_INCREASE_PARALLELISM_DEFAULT) == "true") {
       opt->IncreaseParallelism();
@@ -479,7 +486,7 @@ DB::Status RocksdbDB::ReadSingle(const std::string &table, const std::string &ke
                                  const std::vector<std::string> *fields,
                                  std::vector<Field> &result) {
   std::string data;
-  terarkdb::Status s = db_->Get(terarkdb::ReadOptions(), key, &data);
+  rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), key, &data);
   if (s.IsNotFound()) {
     return kNotFound;
   } else if (!s.ok()) {
@@ -502,7 +509,7 @@ DB::Status RocksdbDB::ReadSingle(const std::string &table, const std::string &ke
 DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &key, int len,
                                  const std::vector<std::string> *fields,
                                  std::vector<std::vector<Field>> &result) {
-  terarkdb::Iterator *db_iter = db_->NewIterator(terarkdb::ReadOptions());
+  rocksdb::Iterator *db_iter = db_->NewIterator(rocksdb::ReadOptions());
   db_iter->Seek(key);
   for (int i = 0; db_iter->Valid() && i < len; i++) {
     std::string data = db_iter->value().ToString();
@@ -530,7 +537,7 @@ DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &
   }
 
   std::string data;
-  terarkdb::Status s = db_->Get(terarkdb::ReadOptions(), key, &data);
+  rocksdb::Status s = db_->Get(rocksdb::ReadOptions(), key, &data);
   if (s.IsNotFound()) {
     return kNotFound;
   } else if (!s.ok()) {
@@ -550,7 +557,7 @@ DB::Status RocksdbDB::UpdateSingle(const std::string &table, const std::string &
     }
     assert(found);
   }
-  terarkdb::WriteOptions wopt;
+  rocksdb::WriteOptions wopt;
   wopt.disableWAL = disable_wal_;
 
   data.clear();
@@ -571,11 +578,11 @@ DB::Status RocksdbDB::UpdateAllFieldsSingle(const std::string &table, const std:
 
   std::string data;
 
-  terarkdb::WriteOptions wopt;
+  rocksdb::WriteOptions wopt;
   wopt.disableWAL = disable_wal_;
 
   SerializeRow(values, data);
-  terarkdb::Status s = db_->Put(wopt, key, data);
+  rocksdb::Status s = db_->Put(wopt, key, data);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
   }
@@ -586,9 +593,9 @@ DB::Status RocksdbDB::MergeSingle(const std::string &table, const std::string &k
                                   std::vector<Field> &values) {
   std::string data;
   SerializeRow(values, data);
-  terarkdb::WriteOptions wopt;
+  rocksdb::WriteOptions wopt;
   wopt.disableWAL = disable_wal_;
-  terarkdb::Status s = db_->Merge(wopt, key, data);
+  rocksdb::Status s = db_->Merge(wopt, key, data);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Merge: ") + s.ToString());
   }
@@ -599,9 +606,9 @@ DB::Status RocksdbDB::InsertSingle(const std::string &table, const std::string &
                                    std::vector<Field> &values) {
   std::string data;
   SerializeRow(values, data);
-  terarkdb::WriteOptions wopt;
+  rocksdb::WriteOptions wopt;
   wopt.disableWAL = disable_wal_;
-  terarkdb::Status s = db_->Put(wopt, key, data);
+  rocksdb::Status s = db_->Put(wopt, key, data);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Put: ") + s.ToString());
   }
@@ -609,9 +616,9 @@ DB::Status RocksdbDB::InsertSingle(const std::string &table, const std::string &
 }
 
 DB::Status RocksdbDB::DeleteSingle(const std::string &table, const std::string &key) {
-  terarkdb::WriteOptions wopt;
+  rocksdb::WriteOptions wopt;
   wopt.disableWAL = disable_wal_;
-  terarkdb::Status s = db_->Delete(wopt, key);
+  rocksdb::Status s = db_->Delete(wopt, key);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Delete: ") + s.ToString());
   }
@@ -622,6 +629,6 @@ DB *NewRocksdbDB() {
   return new RocksdbDB;
 }
 
-const bool registered = DBFactory::RegisterDB("terarkdb", NewRocksdbDB);
+const bool registered = DBFactory::RegisterDB("toplingdb", NewRocksdbDB);
 
 } // ycsbc

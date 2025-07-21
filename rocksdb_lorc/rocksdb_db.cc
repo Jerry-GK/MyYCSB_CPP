@@ -417,6 +417,8 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     if (block_cache_size > 0) {
       block_cache = rocksdb::NewLRUCache(block_cache_size);
       table_options.block_cache = block_cache;
+    } else {
+      table_options.no_block_cache = true;
     }
 #if ROCKSDB_MAJOR < 8
     size_t compressed_cache_size = std::stoul(props.GetProperty(PROP_COMPRESSED_CACHE_SIZE,

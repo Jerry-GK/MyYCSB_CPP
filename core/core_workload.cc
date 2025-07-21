@@ -375,7 +375,8 @@ bool CoreWorkload::DoTransaction(DB &db, bool is_warmup) {
         status = TransactionScan(db);
         break;
       default:
-        throw utils::Exception("Warmup operation request is not recognized!");
+        break;
+        // throw utils::Exception("Warmup operation request is not recognized!");
     }
   } else {
     // Normal operation mode

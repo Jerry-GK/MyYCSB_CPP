@@ -56,8 +56,8 @@ class RocksdbDB : public DB {
   };
   RocksFormat format_;
 
-  void GetOptions(const utils::Properties &props, terarkdb::Options *opt,
-                  std::vector<terarkdb::ColumnFamilyDescriptor> *cf_descs);
+  void GetOptions(const utils::Properties &props, rocksdb::Options *opt,
+                  std::vector<rocksdb::ColumnFamilyDescriptor> *cf_descs);
   static void SerializeRow(const std::vector<Field> &values, std::string &data);
   static void DeserializeRowFilter(std::vector<Field> &values, const char *p, const char *lim,
                                    const std::vector<std::string> &fields);
@@ -96,8 +96,8 @@ class RocksdbDB : public DB {
   bool disable_wal_;
   bool deserialize_on_read_;
 
-  static std::vector<terarkdb::ColumnFamilyHandle *> cf_handles_;
-  static terarkdb::DB *db_;
+  static std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
+  static rocksdb::DB *db_;
   static int ref_cnt_;
   static std::mutex mu_;
 };
