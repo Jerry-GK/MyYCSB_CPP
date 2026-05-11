@@ -8,6 +8,7 @@ db=$1
 # mode=$6
 
 BASE_DB=rocksdb_lorc
+source_postfix="source-24B-1KB-20GB"
 
 if [[ -z "$mode" ]]; then
     mode="test"
@@ -48,8 +49,6 @@ else
     properties_file="${db}.properties"
 fi
 
-source_postfix="-source-24B-1KB-4GB-${distribution}"
-
 # Check that at least one of 'load' or 'run' is specified
 if [[ -z "$load_flag" && -z "$run_flag" ]]; then
     echo "Error: At least one of 'load' or 'run' must be specified"
@@ -73,8 +72,8 @@ fi
 # Prepare database directory
 sudo rm -rf ./db/ycsb-$db
 if [[ "$load_flag" == "" ]]; then
-    echo "Copying existing database ./db/ycsb-${db}${source_postfix}"
-    sudo cp -r ./db/ycsb-${db}${source_postfix} ./db/ycsb-$db
+    echo "Copying existing database ./db/ycsb-${db}-${source_postfix}"
+    sudo cp -r ./db/ycsb-${source_postfix}/ycsb-${db}-${source_postfix}-${distribution} ./db/ycsb-$db
 fi
 
 # Execute test
@@ -85,7 +84,7 @@ if [[ "$mode" == "profile" ]]; then
     profile_filename="ycsb"
 
     # Use perf for performance sampling (requires root privileges or perf permissions)
-    sudo perf record -F 99 --call-graph dwarf -g --delay 40000 -o ./profile/data/${profile_filename}.data ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust -P $BASE_DB/$properties_file -s
+    sudo perf record -F 99 --call-graph dwarf -g --delay 40000 -o ./profile/data/${profile_filename}.data ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust_20GB -P $BASE_DB/$properties_file -s
 
     # Generate flame graph (FlameGraph tool needs to be installed)
     sudo perf script -i ./profile/data/${profile_filename}.data | \
@@ -95,8 +94,8 @@ if [[ "$mode" == "profile" ]]; then
     # Clean up intermediate files
     rm -f ./profile/data/${profile_filename}.data
 elif [[ "$mode" == "test" ]]; then
-    sudo ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust -P $BASE_DB/$properties_file -s
+    sudo ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust_20GB -P $BASE_DB/$properties_file -s
 elif [[ "$mode" == "debug" ]]; then
     echo "Starting GDB debug session..."
-    sudo gdb --args ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust -P $BASE_DB/$properties_file -s
+    sudo gdb --args ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust_20GB -P $BASE_DB/$properties_file -s
 fi

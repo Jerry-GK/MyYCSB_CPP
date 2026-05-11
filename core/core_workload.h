@@ -192,7 +192,7 @@ class CoreWorkload {
 
   virtual bool DoInsert(DB &db);
   virtual bool DoTransaction(DB &db);
-  virtual bool DoTransaction(DB &db, bool is_warmup);
+  virtual bool DoTransaction(DB &db, bool is_warmup, int op_num);
 
   bool read_all_fields() const { return read_all_fields_; }
   bool write_all_fields() const { return write_all_fields_; }
@@ -228,6 +228,7 @@ class CoreWorkload {
   DB::Status TransactionRead(DB &db);
   DB::Status TransactionReadModifyWrite(DB &db);
   DB::Status TransactionScan(DB &db);
+  DB::Status TransactionScanWarmupBoundary(DB &db, int op_num);
   DB::Status TransactionUpdate(DB &db);
   DB::Status TransactionInsert(DB &db);
 
@@ -248,6 +249,7 @@ class CoreWorkload {
   bool ordered_inserts_;
   bool random_inserts_;
   size_t record_count_;
+  size_t max_scan_len_;
   int zero_padding_;
   double hot_data_ratio_;
   double warmup_ratio_;

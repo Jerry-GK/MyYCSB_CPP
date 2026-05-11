@@ -133,6 +133,7 @@ void CoreWorkload::Init(const utils::Properties &p) {
                                            REQUEST_DISTRIBUTION_DEFAULT);
   int min_scan_len = std::stoi(p.GetProperty(MIN_SCAN_LENGTH_PROPERTY, MIN_SCAN_LENGTH_DEFAULT));
   int max_scan_len = std::stoi(p.GetProperty(MAX_SCAN_LENGTH_PROPERTY, MAX_SCAN_LENGTH_DEFAULT));
+  max_scan_len_ = max_scan_len;
   std::string scan_len_dist = p.GetProperty(SCAN_LENGTH_DISTRIBUTION_PROPERTY,
                                             SCAN_LENGTH_DISTRIBUTION_DEFAULT);
   int insert_start = std::stoi(p.GetProperty(INSERT_START_PROPERTY, INSERT_START_DEFAULT));
@@ -203,20 +204,18 @@ void CoreWorkload::Init(const utils::Properties &p) {
 
   if (request_dist == "uniform") {
     key_chooser_ = new UniformGenerator(0, record_count_ - 1);
-
+    
   } else if (request_dist == "zipfian") {
     // If the number of keys changes, we don't want to change popular keys.
     // So we construct the scrambled zipfian generator with a keyspace
     // that is larger than what exists at the beginning of the test.
     // If the generator picks a key that is not inserted yet, we just ignore it
     // and pick another key.
-    int op_count = std::stoi(p.GetProperty(OPERATION_COUNT_PROPERTY));
-    int new_keys = (int)(op_count * insert_proportion * 2); // a fudge factor
     if (p.ContainsKey(ZIPFIAN_CONST_PROPERTY)) {
       double zipfian_const = std::stod(p.GetProperty(ZIPFIAN_CONST_PROPERTY));
-      key_chooser_ = new ScrambledZipfianGenerator(0, record_count_ + new_keys - 1, zipfian_const);
+      key_chooser_ = new ScrambledZipfianGenerator(0, record_count_ - 1, zipfian_const);
     } else {
-      key_chooser_ = new ScrambledZipfianGenerator(record_count_ + new_keys);
+      key_chooser_ = new ScrambledZipfianGenerator(record_count_);
     }
   } else if (request_dist == "latest") {
     if (random_inserts_) {
@@ -232,20 +231,18 @@ void CoreWorkload::Init(const utils::Properties &p) {
   // Create hot data key chooser for read/scan operations
   uint64_t hot_data_start = static_cast<uint64_t>(record_count_ * (1.0 - hot_data_ratio_));
   if (request_dist == "uniform") {
-    hot_key_chooser_ = new UniformGenerator(hot_data_start, record_count_ - 1);
+    hot_key_chooser_ = new UniformGenerator(hot_data_start, record_count_ - 1 - max_scan_len + 1);
   } else if (request_dist == "zipfian") {
-    int op_count = std::stoi(p.GetProperty(OPERATION_COUNT_PROPERTY));
-    int new_keys = (int)(op_count * insert_proportion * 2);
     if (p.ContainsKey(ZIPFIAN_CONST_PROPERTY)) {
       double zipfian_const = std::stod(p.GetProperty(ZIPFIAN_CONST_PROPERTY));
-      hot_key_chooser_ = new ScrambledZipfianGenerator(hot_data_start, record_count_ + new_keys - 1, zipfian_const);
+      hot_key_chooser_ = new ScrambledZipfianGenerator(hot_data_start, record_count_ - 1 - max_scan_len + 1, zipfian_const);
     } else {
-      hot_key_chooser_ = new ScrambledZipfianGenerator(hot_data_start, record_count_ + new_keys - 1);
+      hot_key_chooser_ = new ScrambledZipfianGenerator(hot_data_start, record_count_ - 1 - max_scan_len + 1);
     }
   } else if (request_dist == "latest") {
     if (random_inserts_) {
       // For random inserts, use uniform distribution as fallback
-      hot_key_chooser_ = new UniformGenerator(hot_data_start, record_count_ - 1);
+      hot_key_chooser_ = new UniformGenerator(hot_data_start, record_count_ - 1 - max_scan_len + 1);
     } else {
       hot_key_chooser_ = new SkewedLatestGenerator(*static_cast<AcknowledgedCounterGenerator*>(transaction_insert_key_sequence_));
     }
@@ -363,16 +360,17 @@ bool CoreWorkload::DoTransaction(DB &db) {
   return (status == DB::kOK);
 }
 
-bool CoreWorkload::DoTransaction(DB &db, bool is_warmup) {
+bool CoreWorkload::DoTransaction(DB &db, bool is_warmup, int op_num) {
   DB::Status status;
   if (is_warmup) {
-    // During warmup, only perform READ and SCAN operations
+    // During warmup, only perform SCAN operations
     switch (warmup_op_chooser_.Next()) {
-      case READ:
-        status = TransactionRead(db);
-        break;
       case SCAN:
-        status = TransactionScan(db);
+        if (op_num == 1 || op_num == 2) {
+          status = TransactionScanWarmupBoundary(db, op_num);
+        } else {
+          status = TransactionScan(db);
+        }
         break;
       default:
         break;
@@ -444,6 +442,29 @@ DB::Status CoreWorkload::TransactionScan(DB &db) {
   uint64_t key_num = NextTransactionKeyNumHot();
   const std::string key = BuildKeyName(key_num);
   int len = scan_len_chooser_->Next();
+  std::vector<std::vector<DB::Field>> result;
+  if (!read_all_fields()) {
+    std::vector<std::string> fields;
+    fields.push_back(NextFieldName());
+    return db.Scan(table_name_, key, len, &fields, result);
+  } else {
+    return db.Scan(table_name_, key, len, NULL, result);
+  }
+}
+
+DB::Status CoreWorkload::TransactionScanWarmupBoundary(DB &db, int op_num) {
+  uint64_t hot_data_start = static_cast<uint64_t>(record_count_ * (1.0 - hot_data_ratio_));
+  uint64_t key_num = 0;
+  if (op_num == 1) {
+    key_num = hot_data_start;
+  } else if (op_num == 2) {
+    key_num = record_count_ - 1 - max_scan_len_ + 1;
+  } else {
+    throw utils::Exception("Invalid operation number for warmup scan boundary: " + std::to_string(op_num));
+  }
+
+  const std::string key = BuildKeyName(key_num);
+  int len = max_scan_len_;
   std::vector<std::vector<DB::Field>> result;
   if (!read_all_fields()) {
     std::vector<std::string> fields;
