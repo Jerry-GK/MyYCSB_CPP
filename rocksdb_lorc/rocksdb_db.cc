@@ -35,6 +35,9 @@ namespace {
   const std::string PROP_CREATE_IF_MISSING = "rocksdb.create_if_missing";
   const std::string PROP_CREATE_IF_MISSING_DEFAULT = "false";
 
+  const std::string PROP_READ_ONLY = "rocksdb.read_only";
+  const std::string PROP_READ_ONLY_DEFAULT = "false";
+
   const std::string PROP_DISABLE_AUTO_COMPACTIONS = "rocksdb.disable_auto_compactions";
   const std::string PROP_DISABLE_AUTO_COMPACTIONS_DEFAULT = "false";
 
@@ -238,19 +241,29 @@ void RocksdbDB::Init() {
 #endif
 
   rocksdb::Status s;
+  const bool read_only = props.GetProperty(PROP_READ_ONLY, PROP_READ_ONLY_DEFAULT) == "true";
+  if (read_only && props.GetProperty(PROP_DESTROY, PROP_DESTROY_DEFAULT) == "true") {
+    throw utils::Exception("rocksdb.read_only=true cannot be used with rocksdb.destroy=true");
+  }
   if (props.GetProperty(PROP_DESTROY, PROP_DESTROY_DEFAULT) == "true") {
     s = rocksdb::DestroyDB(db_path, opt);
     if (!s.ok()) {
       throw utils::Exception(std::string("RocksDB DestroyDB: ") + s.ToString());
     }
   }
-  if (cf_descs.empty()) {
+  if (read_only) {
+    if (cf_descs.empty()) {
+      s = rocksdb::DB::OpenForReadOnly(opt, db_path, &db_);
+    } else {
+      s = rocksdb::DB::OpenForReadOnly(opt, db_path, cf_descs, &cf_handles_, &db_);
+    }
+  } else if (cf_descs.empty()) {
     s = rocksdb::DB::Open(opt, db_path, &db_);
   } else {
     s = rocksdb::DB::Open(opt, db_path, cf_descs, &cf_handles_, &db_);
   }
   if (!s.ok()) {
-    throw utils::Exception(std::string("RocksDB Open: ") + s.ToString());
+    throw utils::Exception(std::string(read_only ? "RocksDB OpenForReadOnly: " : "RocksDB Open: ") + s.ToString());
   }
 }
 
