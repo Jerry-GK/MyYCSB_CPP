@@ -63,17 +63,17 @@ fi
 # Check and process mode parameter
 if [[ "$mode" == "build" ]]; then
     echo "Building YCSB..."
-    sudo make clean
-    sudo make BIND_ROCKSDB_LORC=1
+    make clean
+    make BIND_ROCKSDB_LORC=1
     # exit
     exit 0
 fi
 
 # Prepare database directory
-sudo rm -rf ./db/ycsb-$db
+rm -rf ./db/ycsb-$db
 if [[ "$load_flag" == "" ]]; then
     echo "Copying existing database ./db/ycsb-${db}-${source_postfix}"
-    sudo cp -r ./db/ycsb-${source_postfix}/ycsb-${db}-${source_postfix}-${distribution} ./db/ycsb-$db
+    cp -r ./db/ycsb-${source_postfix}/ycsb-${db}-${source_postfix}-${distribution} ./db/ycsb-$db
 fi
 
 # Execute test
@@ -84,18 +84,18 @@ if [[ "$mode" == "profile" ]]; then
     profile_filename="ycsb"
 
     # Use perf for performance sampling (requires root privileges or perf permissions)
-    sudo perf record -F 99 --call-graph dwarf -g --delay 40000 -o ./profile/data/${profile_filename}.data ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust_20GB -P $BASE_DB/$properties_file -s
+    perf record -F 99 --call-graph dwarf -g --delay 40000 -o ./profile/data/${profile_filename}.data ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust_20GB -P $BASE_DB/$properties_file -s
 
     # Generate flame graph (FlameGraph tool needs to be installed)
-    sudo perf script -i ./profile/data/${profile_filename}.data | \
+    perf script -i ./profile/data/${profile_filename}.data | \
         stackcollapse-perf.pl | \
         flamegraph.pl > ./profile/${profile_filename}_linux_flamegraph.svg
 
     # Clean up intermediate files
     rm -f ./profile/data/${profile_filename}.data
 elif [[ "$mode" == "test" ]]; then
-    sudo ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust_20GB -P $BASE_DB/$properties_file -s
+    ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust_20GB -P $BASE_DB/$properties_file -s
 elif [[ "$mode" == "debug" ]]; then
     echo "Starting GDB debug session..."
-    sudo gdb --args ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust_20GB -P $BASE_DB/$properties_file -s
+    gdb --args ./ycsb $load_flag $run_flag -db $BASE_DB -P workloads/workload_cust_20GB -P $BASE_DB/$properties_file -s
 fi
