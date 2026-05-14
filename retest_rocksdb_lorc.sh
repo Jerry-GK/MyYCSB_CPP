@@ -8,7 +8,6 @@ db=$1
 # mode=$6
 
 BASE_DB=rocksdb_lorc
-source_postfix="source-24B-1KB-20GB"
 workload_file="workloads/workload_cust_20GB"
 
 if [[ -z "$mode" ]]; then
@@ -115,6 +114,18 @@ scanproportion=$(prop_or_default "$workload_file" "scanproportion" "0")
 updateproportion=$(prop_or_default "$workload_file" "updateproportion" "0")
 insertproportion=$(prop_or_default "$workload_file" "insertproportion" "0")
 
+case "$recordcount" in
+    4000000)
+        source_postfix="source-24B-1KB-4GB"
+        ;;
+    20000000)
+        source_postfix="source-24B-1KB-20GB"
+        ;;
+    *)
+        source_postfix="${SOURCE_POSTFIX:-source-24B-1KB-20GB}"
+        ;;
+esac
+
 read_only_workload=false
 if is_zero_prop "$updateproportion" && is_zero_prop "$insertproportion"; then
     read_only_workload=true
@@ -131,6 +142,10 @@ work_db_path="./db/ycsb-$db"
 db_path="$work_db_path"
 copy_db=true
 extra_props=()
+
+if [[ -n "${ROCKSDB_USE_DIRECT_READS:-}" ]]; then
+    extra_props+=("-p" "rocksdb.use_direct_reads=${ROCKSDB_USE_DIRECT_READS}")
+fi
 
 if [[ "$run_flag" != "" && "$load_flag" == "" && "$read_only_workload" == "true" ]]; then
     copy_db=false
@@ -149,7 +164,11 @@ echo "  distribution=$distribution"
 echo "  lorc=$lorc"
 echo "  read_only_workload=$read_only_workload"
 echo "  copy_db=$copy_db"
+echo "  source_postfix=$source_postfix"
 echo "  db_path=$db_path"
+if [[ -n "${ROCKSDB_USE_DIRECT_READS:-}" ]]; then
+    echo "  use_direct_reads=$ROCKSDB_USE_DIRECT_READS"
+fi
 echo "  operationcount=$operationcount"
 echo "  warmup_ratio=$warmup_ratio"
 echo "  hot_data_ratio=$hot_data_ratio"
