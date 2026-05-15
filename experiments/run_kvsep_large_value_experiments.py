@@ -694,20 +694,34 @@ def cache_diagnostic(rows: list[dict[str, str]], out: Path) -> None:
 
 
 def lorc_hit_figure(rows: list[dict[str, str]], out: Path) -> None:
-    subset = [r for r in rows if r.get("lorc") == "1" and r.get("returncode", "1") == "0"]
-    fig, ax = plt.subplots(figsize=(3.45, 2.35))
-    xs = range(len(subset))
+    subset = [
+        r for r in rows
+        if r.get("lorc") == "1"
+        and r.get("returncode", "1") == "0"
+        and r.get("variant") == "BlobDB+LORC no blob cache"
+        and r.get("experiment") != "kvsep_direct_probe"
+    ]
+    labels = [
+        r["experiment"]
+        .replace("kvsep_cache_path", "cache path")
+        .replace("kvsep_scan_length_", "scan len ")
+        .replace("kvsep_hot_ratio_", "hot ")
+        for r in subset
+    ]
+    fig, ax = plt.subplots(figsize=(6.9, 2.8))
+    ys = range(len(subset))
     hit_size = [100 * f(r, "lorc_hit_size_rate") for r in subset]
     full_hit = [100 * f(r, "lorc_full_hit_rate") for r in subset]
-    ax.bar([x - 0.18 for x in xs], hit_size, width=0.36, color="#E15759", label="hit records")
-    ax.bar([x + 0.18 for x in xs], full_hit, width=0.36, color="#F28E2B", label="full scans")
-    ax.set_ylabel("Hit rate (%)")
-    ax.set_xticks(list(xs))
-    ax.set_xticklabels([r["experiment"].replace("kvsep_", "").replace("_", "\n") for r in subset], rotation=0)
-    ax.set_ylim(0, 105)
-    ax.grid(axis="y", color="#dddddd", linewidth=0.55, alpha=0.85)
+    ax.barh([y - 0.18 for y in ys], hit_size, height=0.36, color="#E15759", label="hit records")
+    ax.barh([y + 0.18 for y in ys], full_hit, height=0.36, color="#F28E2B", label="full scans")
+    ax.set_xlabel("Hit rate (%)")
+    ax.set_yticks(list(ys))
+    ax.set_yticklabels(labels)
+    ax.set_xlim(0, 105)
+    ax.grid(axis="x", color="#dddddd", linewidth=0.55, alpha=0.85)
     ax.set_axisbelow(True)
-    ax.legend(frameon=False)
+    ax.legend(frameon=False, ncol=2, loc="lower right")
+    ax.invert_yaxis()
     fig.savefig(out)
     plt.close(fig)
 

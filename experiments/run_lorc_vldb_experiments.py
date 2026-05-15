@@ -442,16 +442,6 @@ def build_matrix(workload_dir: Path) -> list[dict]:
         coverage_factor=4.0,
     )
 
-    for threads in [1, 4, 8]:
-        add(
-            f"threads_{threads}",
-            VARIANTS,
-            120_000,
-            threads=threads,
-            min_warmup_ops=100_000,
-            coverage_factor=8.0,
-        )
-
     add(
         "direct_reads_on",
         VARIANTS[:2],
@@ -719,6 +709,10 @@ def generate_figures(summary: Path, fig_dir: Path) -> list[Path]:
     line_by_variant(plt.gca(), cache_rows, "experiment_cache_mb", "scan_p99_us", "p99 scan latency (us)", "Range cache size (MB)", log=True)
     save("eval_cache_size_p99.pdf")
 
+    plt.figure(figsize=(3.45, 2.45))
+    line_by_variant(plt.gca(), cache_rows, "experiment_cache_mb", "lorc_hit_size_rate", "Hit-record ratio", "Range cache size (MB)")
+    save("eval_cache_size_hit_rate.pdf")
+
     mix_rows = select(rows, prefix="mix_scan_")
     plt.figure(figsize=(3.45, 2.45))
     grouped_bar(plt.gca(), mix_rows, "scan_prop", "throughputops/sec", "Throughput (ops/s)", "Scan proportion")
@@ -741,16 +735,6 @@ def generate_figures(summary: Path, fig_dir: Path) -> list[Path]:
     plt.figure(figsize=(3.45, 2.25))
     bar(plt.gca(), [r["variant"] for r in update_rows], [f(r, "update_p99_us") for r in update_rows], "p99 update latency (us)", log=True)
     save("eval_update_p99.pdf")
-
-    thread_rows = select(rows, prefix="threads_")
-    if thread_rows:
-        plt.figure(figsize=(3.45, 2.45))
-        grouped_bar(plt.gca(), thread_rows, "threads", "throughputops/sec", "Throughput (ops/s)", "Client threads")
-        save("eval_thread_scaling_throughput.pdf")
-
-        plt.figure(figsize=(3.45, 2.45))
-        grouped_bar(plt.gca(), thread_rows, "threads", "scan_p99_us", "p99 scan latency (us)", "Client threads")
-        save("eval_thread_scaling_p99.pdf")
 
     direct_rows = select(rows, experiment="direct_reads_on")
     if direct_rows:
