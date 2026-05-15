@@ -20,6 +20,7 @@ CUSTOM_ROCKSDB_LORC_PATH ?= /home/gjr/mylibs/lorcdb_${ROCKSDB_LORC_BUILD_TYPE}
 CUSTOM_TERARKDB_PATH ?= /home/gjr/mylibs/terarkdb_${TERARKDB_BUILD_TYPE}
 CUSTOM_TOPLINGDB_PATH ?= /home/gjr/mylibs/toplingdb_${TOPLINGDB_BUILD_TYPE}
 CUSTOM_TITAN_PATH ?= /home/gjr/mylibs/titan_${TITAN_BUILD_TYPE}
+CUSTOM_LSBM_SOURCE_PATH ?= /home/gjr/projects/lsbm
 
 
 # Database bindings
@@ -106,7 +107,7 @@ ifeq ($(BIND_TOPLINGDB), 1)
 endif
 
 ifeq ($(BIND_LSBM), 1)
-	CXXFLAGS += -I$(CUSTOM_LSBM_PATH)/include
+	CXXFLAGS += -I$(CUSTOM_LSBM_PATH)/include -I$(CUSTOM_LSBM_SOURCE_PATH)
 	LDFLAGS += -L$(CUSTOM_LSBM_PATH)/lib -ldb_lsmcb -ldb_common -lport -ltable -lutil -Wl,-rpath,$(CUSTOM_LSBM_PATH)/lib
 	SOURCES += $(wildcard lsbm/*.cc)
 endif

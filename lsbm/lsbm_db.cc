@@ -14,6 +14,20 @@
 #include <leveldb/options.h>
 #include <leveldb/write_batch.h>
 
+#include <sstream>
+
+namespace leveldb {
+namespace config {
+extern bool run_compaction;
+extern bool buffered_merge;
+}  // namespace config
+namespace runtime {
+extern double compaction_min_score;
+extern int compaction_buffer_trim_interval;
+extern int compaction_buffer_use_length[];
+}  // namespace runtime
+}  // namespace leveldb
+
 namespace {
   const std::string PROP_NAME = "leveldb.dbname";
   const std::string PROP_NAME_DEFAULT = "";
@@ -47,9 +61,64 @@ namespace {
 
   const std::string PROP_BLOCK_RESTART_INTERVAL = "leveldb.block_restart_interval";
   const std::string PROP_BLOCK_RESTART_INTERVAL_DEFAULT = "0";
+
+  const std::string PROP_RUN_COMPACTION = "leveldb.run_compaction";
+  const std::string PROP_RUN_COMPACTION_DEFAULT = "true";
+
+  const std::string PROP_BUFFERED_MERGE = "leveldb.buffered_merge";
+  const std::string PROP_BUFFERED_MERGE_DEFAULT = "true";
+
+  const std::string PROP_COMPACTION_MIN_SCORE = "leveldb.compaction_min_score";
+  const std::string PROP_COMPACTION_MIN_SCORE_DEFAULT = "1.0";
+
+  const std::string PROP_COMPACTION_BUFFER_TRIM_INTERVAL =
+      "leveldb.compaction_buffer_trim_interval";
+  const std::string PROP_COMPACTION_BUFFER_TRIM_INTERVAL_DEFAULT = "30";
+
+  const std::string PROP_COMPACTION_BUFFER_USE_LENGTH =
+      "leveldb.compaction_buffer_use_length";
+  const std::string PROP_COMPACTION_BUFFER_USE_LENGTH_DEFAULT = "";
+
+  bool IsTrue(const std::string &value) {
+    return value == "true" || value == "1" || value == "yes";
+  }
+
 } // anonymous
 
 namespace ycsbc {
+
+namespace {
+void ApplyLsbmRuntimeOptions(const utils::Properties &props) {
+  leveldb::config::run_compaction =
+      IsTrue(props.GetProperty(PROP_RUN_COMPACTION,
+                               PROP_RUN_COMPACTION_DEFAULT));
+  leveldb::config::buffered_merge =
+      IsTrue(props.GetProperty(PROP_BUFFERED_MERGE,
+                               PROP_BUFFERED_MERGE_DEFAULT));
+  leveldb::runtime::compaction_min_score =
+      std::stod(props.GetProperty(PROP_COMPACTION_MIN_SCORE,
+                                  PROP_COMPACTION_MIN_SCORE_DEFAULT));
+  leveldb::runtime::compaction_buffer_trim_interval =
+      std::stoi(props.GetProperty(PROP_COMPACTION_BUFFER_TRIM_INTERVAL,
+                                  PROP_COMPACTION_BUFFER_TRIM_INTERVAL_DEFAULT));
+
+  const std::string use_lengths =
+      props.GetProperty(PROP_COMPACTION_BUFFER_USE_LENGTH,
+                        PROP_COMPACTION_BUFFER_USE_LENGTH_DEFAULT);
+  if (!use_lengths.empty()) {
+    std::stringstream ss(use_lengths);
+    std::string token;
+    int level = 1;
+    while (std::getline(ss, token, ',') && level < 4) {
+      if (!token.empty()) {
+        leveldb::runtime::compaction_buffer_use_length[level] =
+            std::stoi(token);
+      }
+      ++level;
+    }
+  }
+}
+}  // namespace
 
 leveldb::DB *LeveldbDB::db_ = nullptr;
 int LeveldbDB::ref_cnt_ = 0;
@@ -102,6 +171,7 @@ void LeveldbDB::Init() {
   leveldb::Options opt;
   opt.create_if_missing = true;
   GetOptions(props, &opt);
+  ApplyLsbmRuntimeOptions(props);
 
   leveldb::Status s;
 
