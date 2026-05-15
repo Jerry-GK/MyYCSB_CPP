@@ -113,10 +113,24 @@ int main(const int argc, const char *argv[]) {
     const int total_ops = stoi(props[ycsbc::CoreWorkload::OPERATION_COUNT_PROPERTY]);
     warmup_ops = static_cast<int>(total_ops * wl.warmup_ratio());
   }
+  const bool single_thread_warmup =
+      (props.GetProperty("singlethreadwarmup", "false") == "true");
+
+  std::vector<int> per_thread_warmup_ops;
+  per_thread_warmup_ops.reserve(num_threads);
+  for (int i = 0; i < num_threads; ++i) {
+    int thread_warmup_ops =
+        warmup_ops / num_threads + (i < warmup_ops % num_threads ? 1 : 0);
+    if (single_thread_warmup) {
+      thread_warmup_ops = (i == 0 ? warmup_ops : 0);
+    }
+    per_thread_warmup_ops.push_back(thread_warmup_ops);
+  }
 
   std::vector<ycsbc::DB *> dbs;
   for (int i = 0; i < num_threads; i++) {
-    ycsbc::DB *db = ycsbc::DBFactory::CreateDB(&props, measurements, warmup_ops);
+    ycsbc::DB *db = ycsbc::DBFactory::CreateDB(&props, measurements,
+                                                per_thread_warmup_ops[i]);
     if (db == nullptr) {
       std::cerr << "Unknown database name " << props["dbname"] << std::endl;
       exit(1);
@@ -206,10 +220,16 @@ int main(const int argc, const char *argv[]) {
     
     std::vector<std::future<int>> client_threads;
     std::vector<ycsbc::utils::RateLimiter *> rate_limiters;
+    const int measured_base_ops =
+        single_thread_warmup ? non_warmup_ops : total_ops;
     for (int i = 0; i < num_threads; ++i) {
-      int thread_ops = total_ops / num_threads;
-      if (i < total_ops % num_threads) {
+      int thread_ops = measured_base_ops / num_threads;
+      if (i < measured_base_ops % num_threads) {
         thread_ops++;
+      }
+      int thread_warmup_ops = per_thread_warmup_ops[i];
+      if (single_thread_warmup) {
+        thread_ops += thread_warmup_ops;
       }
       ycsbc::utils::RateLimiter *rlim = nullptr;
       if (ops_limit > 0 || rate_file != "") {
@@ -221,7 +241,7 @@ int main(const int argc, const char *argv[]) {
                                              thread_ops, false, !do_load, true, &latch, &warmup_latch, 
                                              &measurement_started, &measurement_timer, 
                                              &measurement_latch,
-                                             warmup_ops / num_threads + (i < warmup_ops % num_threads ? 1 : 0), rlim));
+                                             thread_warmup_ops, rlim));
     }
 
     std::future<void> rlim_future;

@@ -1,11 +1,12 @@
 #!/usr/bin/env python3
 """KV-separation stress experiments for the LORC paper.
 
-The suite uses a separate 8KB-value source database. It is designed to expose
-the path that is specific to KV-separated LSMs: sorted key-pointer iteration
-followed by large-value dereferences from blob files. Read-only runs reuse the
-source DB and disable automatic compaction; update runs should be added as a
-separate copied-DB experiment.
+The suite uses a separate 8KB-value source database and a strict 1GB configured
+cache budget for every tested system. It is designed to expose the path that is
+specific to KV-separated LSMs: sorted key-pointer iteration followed by large
+value reconstruction from blob files. Read-only runs reuse the source DB and
+disable automatic compaction; update runs should be added as a separate copied
+DB experiment.
 """
 
 from __future__ import annotations
@@ -76,57 +77,36 @@ RUN_VARIANTS = [
         "rocksdb.properties",
         False,
         "inline",
-        {"rocksdb.block_cache_size": str(512 * MB)},
-    ),
-    Variant(
-        "BlobDB no blob cache",
-        "blobdb",
-        "blobdb.properties",
-        False,
-        "blobdb",
-        {"rocksdb.block_cache_size": str(512 * MB), "rocksdb.blob_cache_size": "0"},
-    ),
-    Variant(
-        "BlobDB 64MB blob",
-        "blobdb",
-        "blobdb.properties",
-        False,
-        "blobdb",
-        {"rocksdb.block_cache_size": str(512 * MB), "rocksdb.blob_cache_size": str(64 * MB)},
-    ),
-    Variant(
-        "BlobDB 512MB blob",
-        "blobdb",
-        "blobdb.properties",
-        False,
-        "blobdb",
-        {"rocksdb.block_cache_size": str(512 * MB), "rocksdb.blob_cache_size": str(512 * MB)},
-    ),
-    Variant(
-        "BlobDB+LORC no blob cache",
-        "blobdb",
-        "blobdb_lorc.properties",
-        True,
-        "lorc",
         {
-            "rocksdb.block_cache_size": str(512 * MB),
+            "rocksdb.block_cache_size": str(GB),
             "rocksdb.blob_cache_size": "0",
-            "rocksdb.range_cache_size": str(1536 * MB),
-            "rocksdb.range_cache_physical_type": "continuous",
-            "rocksdb.lorc_enable_stats": "true",
+            "rocksdb.range_cache_size": "0",
         },
     ),
     Variant(
-        "BlobDB+LORC 64MB blob",
+        "BlobDB",
+        "blobdb",
+        "blobdb.properties",
+        False,
+        "blobdb",
+        {
+            "rocksdb.block_cache_size": str(256 * MB),
+            "rocksdb.blob_cache_size": str(768 * MB),
+            "rocksdb.range_cache_size": "0",
+        },
+    ),
+    Variant(
+        "BlobDB+LORC",
         "blobdb",
         "blobdb_lorc.properties",
         True,
         "lorc",
         {
-            "rocksdb.block_cache_size": str(512 * MB),
-            "rocksdb.blob_cache_size": str(64 * MB),
-            "rocksdb.range_cache_size": str(1536 * MB),
+            "rocksdb.block_cache_size": "0",
+            "rocksdb.blob_cache_size": "0",
+            "rocksdb.range_cache_size": str(GB),
             "rocksdb.range_cache_physical_type": "continuous",
+            "rocksdb.range_cache_victim_policy": "boundary_lru",
             "rocksdb.lorc_enable_stats": "true",
         },
     ),
@@ -138,78 +118,41 @@ class Experiment:
     name: str
     variants: tuple[str, ...]
     scan_length: int = 50
-    hot_ratio: float = 0.05
-    measured_ops: int = 3000
-    min_warmup_ops: int = 6000
+    hot_ratio: float = 0.20
+    measured_ops: int = 6000
+    min_warmup_ops: int = 15000
     coverage_factor: float = 6.0
-    direct_reads: bool = False
     distribution: str = "zipfian"
 
 
 VARIANT_BY_LABEL = {v.label: v for v in RUN_VARIANTS}
 
 
-def experiment_matrix(profile: str, include_direct_probe: bool) -> list[Experiment]:
+def experiment_matrix(profile: str) -> list[Experiment]:
     core = (
         "RocksDB",
-        "BlobDB no blob cache",
-        "BlobDB 64MB blob",
-        "BlobDB 512MB blob",
-        "BlobDB+LORC no blob cache",
-        "BlobDB+LORC 64MB blob",
+        "BlobDB",
+        "BlobDB+LORC",
     )
     if profile == "quick":
         experiments = [
-            Experiment("kvsep_cache_path", core, measured_ops=400, min_warmup_ops=2000),
+            Experiment("kvsep_cache_path", core, measured_ops=1000, min_warmup_ops=3000),
             Experiment(
                 "kvsep_scan_length_50",
-                ("BlobDB no blob cache", "BlobDB 64MB blob", "BlobDB+LORC no blob cache", "BlobDB+LORC 64MB blob"),
-                measured_ops=400,
-                min_warmup_ops=2000,
+                core,
+                measured_ops=1000,
+                min_warmup_ops=3000,
             ),
         ]
-        if include_direct_probe:
-            experiments.append(
-                Experiment(
-                    "kvsep_direct_probe",
-                    ("RocksDB", "BlobDB no blob cache", "BlobDB+LORC no blob cache"),
-                    scan_length=5,
-                    hot_ratio=0.001,
-                    measured_ops=20,
-                    min_warmup_ops=40,
-                    coverage_factor=1.0,
-                    direct_reads=True,
-                )
-            )
         return experiments
-    scan_variants = (
-        "BlobDB no blob cache",
-        "BlobDB 64MB blob",
-        "BlobDB+LORC no blob cache",
-        "BlobDB+LORC 64MB blob",
-    )
     experiments = [
         Experiment("kvsep_cache_path", core),
-        Experiment("kvsep_scan_length_10", scan_variants, scan_length=10, measured_ops=4000, min_warmup_ops=9000),
-        Experiment("kvsep_scan_length_50", scan_variants, scan_length=50),
-        Experiment("kvsep_scan_length_100", scan_variants, scan_length=100, measured_ops=2000),
-        Experiment("kvsep_hot_ratio_1", scan_variants, hot_ratio=0.01, measured_ops=3000, min_warmup_ops=3000),
-        Experiment("kvsep_hot_ratio_5", scan_variants, hot_ratio=0.05),
-        Experiment("kvsep_hot_ratio_20", scan_variants, hot_ratio=0.20, measured_ops=1500, min_warmup_ops=10000),
+        Experiment("kvsep_scan_length_10", core, scan_length=10, measured_ops=5000, min_warmup_ops=40000),
+        Experiment("kvsep_scan_length_25", core, scan_length=25, measured_ops=5000, min_warmup_ops=25000),
+        Experiment("kvsep_scan_length_50", core, scan_length=50),
+        Experiment("kvsep_scan_length_100", core, scan_length=100, measured_ops=4000),
+        Experiment("kvsep_scan_length_200", core, scan_length=200, measured_ops=3000),
     ]
-    if include_direct_probe:
-        experiments.append(
-            Experiment(
-                "kvsep_direct_probe",
-                ("RocksDB", "BlobDB no blob cache", "BlobDB+LORC no blob cache"),
-                scan_length=5,
-                hot_ratio=0.001,
-                measured_ops=20,
-                min_warmup_ops=40,
-                coverage_factor=1.0,
-                direct_reads=True,
-            )
-        )
     return experiments
 
 
@@ -403,7 +346,7 @@ def run_variant(
         "rocksdb.destroy": "false",
         "rocksdb.create_if_missing": "false",
         "rocksdb.disable_auto_compactions": "true",
-        "rocksdb.use_direct_reads": "true" if exp.direct_reads else "false",
+        "rocksdb.use_direct_reads": "false",
         "rocksdb.enable_statistics": "true",
         "status.interval": "60",
     }
@@ -439,7 +382,6 @@ def run_variant(
         "warmup_ops": warmup,
         "measured_ops": exp.measured_ops,
         "total_ops": total_ops,
-        "use_direct_reads": "true" if exp.direct_reads else "false",
         "random_seed": RANDOM_SEED,
         "log": str(log_path),
     }
@@ -486,7 +428,6 @@ SUMMARY_KEYS = [
     "warmup_ops",
     "measured_ops",
     "total_ops",
-    "use_direct_reads",
     "random_seed",
     "log",
 ]
@@ -514,20 +455,14 @@ def f(row: dict[str, str], key: str) -> float:
 
 COLORS = {
     "RocksDB": "#4E79A7",
-    "BlobDB no blob cache": "#7F7F7F",
-    "BlobDB 64MB blob": "#59A14F",
-    "BlobDB 512MB blob": "#8CD17D",
-    "BlobDB+LORC no blob cache": "#E15759",
-    "BlobDB+LORC 64MB blob": "#FF9D9A",
+    "BlobDB": "#59A14F",
+    "BlobDB+LORC": "#E15759",
 }
 
 SHORT_LABEL = {
     "RocksDB": "RocksDB",
-    "BlobDB no blob cache": "BlobDB\n0MB blob",
-    "BlobDB 64MB blob": "BlobDB\n64MB blob",
-    "BlobDB 512MB blob": "BlobDB\n512MB blob",
-    "BlobDB+LORC no blob cache": "BlobDB+LORC\n0MB blob",
-    "BlobDB+LORC 64MB blob": "BlobDB+LORC\n64MB blob",
+    "BlobDB": "BlobDB\nblock+blob",
+    "BlobDB+LORC": "BlobDB+LORC\nrange cache",
 }
 
 
@@ -615,10 +550,9 @@ def line_by_setting(
 ) -> None:
     fig, ax = plt.subplots(figsize=(3.45, 2.35))
     wanted = [
-        "BlobDB no blob cache",
-        "BlobDB 64MB blob",
-        "BlobDB+LORC no blob cache",
-        "BlobDB+LORC 64MB blob",
+        "RocksDB",
+        "BlobDB",
+        "BlobDB+LORC",
     ]
     for label in wanted:
         series = [
@@ -698,8 +632,7 @@ def lorc_hit_figure(rows: list[dict[str, str]], out: Path) -> None:
         r for r in rows
         if r.get("lorc") == "1"
         and r.get("returncode", "1") == "0"
-        and r.get("variant") == "BlobDB+LORC no blob cache"
-        and r.get("experiment") != "kvsep_direct_probe"
+        and r.get("variant") == "BlobDB+LORC"
     ]
     labels = [
         r["experiment"]
@@ -774,7 +707,6 @@ def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", default=datetime.now().strftime("%Y%m%d-%H%M%S"))
     parser.add_argument("--profile", choices=["quick", "full"], default="full")
-    parser.add_argument("--include-direct-probe", action="store_true")
     parser.add_argument("--reload-source", action="store_true")
     parser.add_argument("--skip-load", action="store_true")
     parser.add_argument("--skip-run", action="store_true")
@@ -807,7 +739,7 @@ def main() -> None:
         rows = [dict(r) for r in load_rows(summary)]
     else:
         rows = []
-        for exp in experiment_matrix(args.profile, args.include_direct_probe):
+        for exp in experiment_matrix(args.profile):
             workload, total_ops, warmup, _ = write_workload(workload_dir, exp)
             for label in exp.variants:
                 rows.append(run_variant(VARIANT_BY_LABEL[label], exp, workload, run_dir, total_ops, warmup))

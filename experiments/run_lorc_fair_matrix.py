@@ -42,6 +42,7 @@ DEFAULT_CACHE_BUDGET = 1024 * MB
 GENERAL_RECORDCOUNT = 4_000_000
 GENERAL_FIELD_LENGTH = 1024
 VALUE_SWEEP_BYTES = 1024 * MB
+CACHE_PRESSURE_BYTES = 256 * MB
 
 
 @dataclass(frozen=True)
@@ -81,6 +82,14 @@ GENERAL_DATASET = Dataset(
     fieldlength=GENERAL_FIELD_LENGTH,
     source_root=ROOT / "db" / "ycsb-source-24B-1KB-4GB-fair-nocomp",
     source_tag="source-24B-1KB-4GB-fair-nocomp",
+)
+
+CACHE_PRESSURE_DATASET = Dataset(
+    name="256MB-1KB",
+    recordcount=CACHE_PRESSURE_BYTES // GENERAL_FIELD_LENGTH,
+    fieldlength=GENERAL_FIELD_LENGTH,
+    source_root=ROOT / "db" / "ycsb-source-24B-1KB-256MB-cache-pressure",
+    source_tag="source-24B-1KB-256MB-cache-pressure",
 )
 
 VARIANTS = [
@@ -478,6 +487,17 @@ def value_dataset(value_size: int) -> Dataset:
     )
 
 
+def unique_datasets(items: Iterable[Dataset]) -> list[Dataset]:
+    out: list[Dataset] = []
+    seen: set[str] = set()
+    for dataset in items:
+        if dataset.name in seen:
+            continue
+        seen.add(dataset.name)
+        out.append(dataset)
+    return out
+
+
 def prepare_sources(
     datasets: list[Dataset],
     *,
@@ -525,6 +545,7 @@ def make_plan(
     budget: int,
     measured_ops: int,
     direct_reads: str,
+    suites: set[str] | None = None,
 ) -> list[dict]:
     workload_dir = out_dir / "workloads"
     workload_dir.mkdir(parents=True, exist_ok=True)
@@ -536,6 +557,11 @@ def make_plan(
         x_value: str,
         x_label: str,
         dataset: Dataset,
+        suite_budget: int | None = None,
+        suite_measured_ops: int | None = None,
+        suite_direct_reads: str | None = None,
+        threads: int = 1,
+        single_thread_warmup: bool = False,
         scan_length: int = 20,
         hot_ratio: float = 0.05,
         read_prop: float = 0.0,
@@ -546,6 +572,11 @@ def make_plan(
         coverage_factor: float = 20.0,
         timeout: int = 1200,
     ) -> None:
+        if suites is not None and suite not in suites:
+            return
+        run_budget = suite_budget if suite_budget is not None else budget
+        run_measured_ops = suite_measured_ops if suite_measured_ops is not None else measured_ops
+        run_direct_reads = suite_direct_reads if suite_direct_reads is not None else direct_reads
         name = (
             f"{suite}_{x_value}_{dataset.name}_sl{scan_length}_hot{hot_ratio:g}_"
             f"scan{scan_prop:g}_upd{update_prop:g}"
@@ -554,7 +585,7 @@ def make_plan(
             workload_dir,
             name,
             dataset=dataset,
-            measured_ops=measured_ops,
+            measured_ops=run_measured_ops,
             hot_ratio=hot_ratio,
             read_prop=read_prop,
             update_prop=update_prop,
@@ -584,7 +615,10 @@ def make_plan(
                     "update_prop": update_prop,
                     "scan_prop": scan_prop,
                     "requestdistribution": requestdistribution,
-                    "direct_reads": direct_reads,
+                    "direct_reads": run_direct_reads,
+                    "threads": threads,
+                    "single_thread_warmup": single_thread_warmup,
+                    "cache_budget_bytes": run_budget,
                     "timeout": timeout,
                 }
             )
@@ -600,17 +634,6 @@ def make_plan(
             coverage_factor=20.0,
         )
 
-    for hot_ratio in [0.01, 0.02, 0.05, 0.10, 0.20]:
-        add_suite(
-            suite="hot_ratio",
-            x_value=f"{hot_ratio:.2f}",
-            x_label=f"{int(hot_ratio * 100)}%",
-            dataset=GENERAL_DATASET,
-            hot_ratio=hot_ratio,
-            min_warmup_ops=40_000,
-            coverage_factor=20.0,
-        )
-
     for value_size in [256, 512, 1024, 4096, 8192]:
         dataset = value_dataset(value_size)
         add_suite(
@@ -622,6 +645,22 @@ def make_plan(
             min_warmup_ops=30_000,
             coverage_factor=20.0,
             timeout=1800,
+        )
+
+    for cache_budget_mb in [16, 32, 64, 128]:
+        add_suite(
+            suite="cache_budget",
+            x_value=str(cache_budget_mb),
+            x_label=f"{cache_budget_mb}MB",
+            dataset=CACHE_PRESSURE_DATASET,
+            suite_budget=cache_budget_mb * MB,
+            suite_measured_ops=max(3_000, measured_ops // 10),
+            suite_direct_reads="false",
+            scan_length=100,
+            hot_ratio=0.10,
+            min_warmup_ops=0,
+            coverage_factor=6.0,
+            timeout=2400,
         )
 
     workload_cases = [
@@ -642,6 +681,36 @@ def make_plan(
             min_warmup_ops=40_000,
             coverage_factor=20.0,
             timeout=1800 if update_prop > 0 else 1200,
+        )
+
+    for factor in [0, 1, 2, 5, 10, 20]:
+        add_suite(
+            suite="warmup",
+            x_value=str(factor),
+            x_label=f"{factor}x",
+            dataset=GENERAL_DATASET,
+            suite_measured_ops=max(30_000, measured_ops // 2),
+            scan_length=20,
+            hot_ratio=0.05,
+            min_warmup_ops=0,
+            coverage_factor=float(factor),
+            timeout=1800,
+        )
+
+    for threads in [1, 2, 4, 8, 16]:
+        add_suite(
+            suite="threads",
+            x_value=str(threads),
+            x_label=str(threads),
+            dataset=GENERAL_DATASET,
+            suite_measured_ops=max(100_000, measured_ops * 2),
+            scan_length=20,
+            hot_ratio=0.05,
+            min_warmup_ops=80_000,
+            coverage_factor=20.0,
+            threads=threads,
+            single_thread_warmup=True,
+            timeout=1800,
         )
 
     return plan
@@ -675,9 +744,29 @@ def execute_plan(
             shutil.copytree(source, work_db)
             db_path = work_db
 
-        props = system_props(variant, budget, direct_reads=item["direct_reads"])
+        run_budget = int(item.get("cache_budget_bytes", budget))
+        props = system_props(variant, run_budget, direct_reads=item["direct_reads"])
         if item["read_only"]:
             props.update(read_only_props(variant))
+        elif variant.engine == "lsbm":
+            props.update(
+                {
+                    "leveldb.destroy": "false",
+                    "leveldb.run_compaction": "true",
+                    "leveldb.compaction_buffer_trim_interval": "30",
+                }
+            )
+        else:
+            props.update(
+                {
+                    "rocksdb.disable_auto_compactions": "false",
+                    "rocksdb.create_if_missing": "false",
+                    "rocksdb.destroy": "false",
+                    "rocksdb.read_only": "false",
+                }
+            )
+        if item.get("single_thread_warmup"):
+            props["singlethreadwarmup"] = "true"
 
         block_cache = int(props.get("rocksdb.block_cache_size", "0"))
         blob_cache = int(props.get("rocksdb.blob_cache_size", "0"))
@@ -695,7 +784,7 @@ def execute_plan(
                 run_dir=out_dir,
                 log_name=log_name,
                 props=props,
-                threads=1,
+                threads=int(item.get("threads", 1)),
                 timeout=item["timeout"],
             )
         finally:
@@ -725,7 +814,9 @@ def execute_plan(
             "warmup_ops": item["warmup_ops"],
             "warmup_ratio": item["warmup_ratio"],
             "direct_reads": item["direct_reads"],
-            "cache_budget_bytes": budget,
+            "threads": int(item.get("threads", 1)),
+            "single_thread_warmup": int(bool(item.get("single_thread_warmup", False))),
+            "cache_budget_bytes": run_budget,
             "block_cache_bytes": block_cache,
             "blob_cache_bytes": blob_cache,
             "range_cache_bytes": range_cache,
@@ -755,6 +846,7 @@ SUMMARY_KEYS = [
     "recordcount",
     "fieldlength",
     "variant",
+    "variant_key",
     "engine",
     "returncode",
     "read_only",
@@ -775,7 +867,10 @@ SUMMARY_KEYS = [
     "scan_prop",
     "operationcount",
     "warmup_ops",
+    "warmup_ratio",
     "direct_reads",
+    "threads",
+    "single_thread_warmup",
     "cache_budget_bytes",
     "block_cache_bytes",
     "blob_cache_bytes",
@@ -1008,6 +1103,65 @@ def make_memory_figure(rows: list[dict], out_path: Path) -> None:
     plt.close(fig)
 
 
+def make_line_figure(
+    rows: list[dict],
+    *,
+    suite: str,
+    metric: str,
+    transform=lambda x: x,
+    ylabel: str,
+    xlabel: str,
+    out_path: Path,
+    title: str,
+) -> None:
+    setup_style()
+    suite_rows = [r for r in rows if r["suite"] == suite]
+    if not suite_rows:
+        return
+    x_pairs: list[tuple[float, str, str]] = []
+    for row in suite_rows:
+        pair = (float(row["x_value"]), row["x_value"], row["x_label"])
+        if pair not in x_pairs:
+            x_pairs.append(pair)
+    x_pairs.sort(key=lambda item: item[0])
+    variants = [v for v in VARIANT_ORDER if any(r["variant"] == v for r in suite_rows)]
+
+    fig, ax = plt.subplots(figsize=(3.55, 2.35), constrained_layout=True)
+    markers = ["o", "s", "^", "D", "P"]
+    for i, variant in enumerate(variants):
+        values = []
+        xs = []
+        for x_numeric, x_value, _ in x_pairs:
+            row = next(
+                (r for r in suite_rows if r["variant"] == variant and r["x_value"] == x_value),
+                None,
+            )
+            if row is None:
+                continue
+            values.append(transform(as_float(row, metric)))
+            xs.append(x_numeric)
+        ax.plot(
+            xs,
+            values,
+            marker=markers[i % len(markers)],
+            linewidth=1.4,
+            markersize=4.2,
+            color=COLORS[variant],
+            label=variant,
+        )
+    ax.set_title(title)
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    ax.grid(axis="both", color="#e1e1e1", linewidth=0.55)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, ncol=1, loc="best")
+    ax.set_xticks([x for x, _, _ in x_pairs])
+    ax.set_xticklabels([label for _, _, label in x_pairs])
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
 def make_figures(summary: Path, figure_dir: Path) -> None:
     rows = load_rows(summary)
     make_metric_row(
@@ -1015,12 +1169,6 @@ def make_figures(summary: Path, figure_dir: Path) -> None:
         suite="scan_length",
         out_path=figure_dir / "eval_fair_scan_length.pdf",
         title_prefix="scan length",
-    )
-    make_metric_row(
-        rows,
-        suite="hot_ratio",
-        out_path=figure_dir / "eval_fair_hot_ratio.pdf",
-        title_prefix="hot region",
     )
     make_metric_row(
         rows,
@@ -1034,6 +1182,116 @@ def make_figures(summary: Path, figure_dir: Path) -> None:
         out_path=figure_dir / "eval_fair_workload.pdf",
         title_prefix="workload",
     )
+    make_metric_row(
+        rows,
+        suite="cache_budget",
+        out_path=figure_dir / "eval_cache_budget.pdf",
+        title_prefix="cache budget",
+    )
+    make_line_figure(
+        rows,
+        suite="warmup",
+        metric="throughputops/sec",
+        transform=lambda v: v / 1000.0,
+        ylabel="Kops/s",
+        xlabel="randomized warmup coverage",
+        out_path=figure_dir / "eval_warmup_curve.pdf",
+        title="warmup sensitivity",
+    )
+    make_line_figure(
+        rows,
+        suite="threads",
+        metric="throughputops/sec",
+        transform=lambda v: v / 1000.0,
+        ylabel="Kops/s",
+        xlabel="client threads",
+        out_path=figure_dir / "eval_scanonly_threads.pdf",
+        title="scan-only scaling",
+    )
+
+
+def write_anomaly_report(rows: list[dict], path: Path) -> None:
+    warnings: list[str] = []
+
+    def row_value(row: dict, key: str) -> float:
+        return as_float(row, key)
+
+    for row in rows:
+        if int(float(row.get("returncode", 0))) != 0:
+            warnings.append(f"nonzero return code: {row.get('suite')} {row.get('x_value')} {row.get('variant')}")
+        total = row_value(row, "configured_total_cache_bytes")
+        budget_value = row_value(row, "cache_budget_bytes")
+        if total > 0 and budget_value > 0 and abs(total - budget_value) > max(1, budget_value * 0.01):
+            warnings.append(
+                f"configured cache budget mismatch: {row.get('suite')} {row.get('x_value')} "
+                f"{row.get('variant')} total={total:.0f} budget={budget_value:.0f}"
+            )
+        avg = row_value(row, "scan_avg_us")
+        p99 = row_value(row, "scan_p99_us")
+        if not math.isnan(avg) and not math.isnan(p99) and p99 + 1e-9 < avg:
+            warnings.append(f"p99 below average: {row.get('suite')} {row.get('x_value')} {row.get('variant')}")
+
+    by_suite_variant: dict[tuple[str, str], list[dict]] = {}
+    for row in rows:
+        by_suite_variant.setdefault((str(row.get("suite")), str(row.get("variant"))), []).append(row)
+
+    for (suite, variant), series in by_suite_variant.items():
+        if suite not in {"scan_length", "cache_budget", "threads", "warmup"}:
+            continue
+        ordered = sorted(series, key=lambda r: float(r.get("x_value", 0)))
+        values = [row_value(r, "throughputops/sec") for r in ordered]
+        xs = [r.get("x_label", r.get("x_value")) for r in ordered]
+        if any(math.isnan(v) for v in values) or len(values) < 3:
+            continue
+        if suite == "scan_length":
+            for a, b, xa, xb in zip(values, values[1:], xs, xs[1:]):
+                if b > a * 1.15:
+                    warnings.append(
+                        f"scan-length non-monotonic throughput: {variant} {xa}->{xb} {a:.1f}->{b:.1f}"
+                    )
+        elif suite in {"cache_budget", "threads", "warmup"}:
+            for a, b, xa, xb in zip(values, values[1:], xs, xs[1:]):
+                if b < a * 0.70:
+                    warnings.append(
+                        f"{suite} large downward jump: {variant} {xa}->{xb} {a:.1f}->{b:.1f}"
+                    )
+
+    by_case: dict[tuple[str, str, str], dict[str, dict]] = {}
+    for row in rows:
+        key = (str(row.get("suite")), str(row.get("x_value")), str(row.get("dataset")))
+        by_case.setdefault(key, {})[str(row.get("variant"))] = row
+    for (suite, x_value, dataset), variants in by_case.items():
+        rocks = variants.get("RocksDB")
+        blob = variants.get("BlobDB")
+        if rocks is None or blob is None:
+            continue
+        rocks_tp = row_value(rocks, "throughputops/sec")
+        blob_tp = row_value(blob, "throughputops/sec")
+        rocks_p99 = row_value(rocks, "scan_p99_us")
+        blob_p99 = row_value(blob, "scan_p99_us")
+        if not math.isnan(rocks_tp) and not math.isnan(blob_tp) and blob_tp > rocks_tp * 1.05:
+            warnings.append(
+                f"native BlobDB faster than native RocksDB: {suite}/{x_value}/{dataset} "
+                f"throughput {blob_tp:.1f}>{rocks_tp:.1f}; inspect blob/page-cache and stats"
+            )
+        if not math.isnan(rocks_p99) and not math.isnan(blob_p99) and blob_p99 < rocks_p99 * 0.95:
+            warnings.append(
+                f"native BlobDB lower p99 than native RocksDB: {suite}/{x_value}/{dataset} "
+                f"p99 {blob_p99:.1f}<{rocks_p99:.1f}; inspect fairness and cache path"
+            )
+
+    lines = [
+        "# LORC Experiment Anomaly Report",
+        "",
+        f"rows={len(rows)}",
+        f"warnings={len(warnings)}",
+        "",
+    ]
+    if warnings:
+        lines.extend(f"- {warning}" for warning in warnings)
+    else:
+        lines.append("No mechanical anomalies were detected by the configured checks.")
+    path.write_text("\n".join(lines) + "\n")
 
 
 def write_manifest(out_dir: Path, plan: list[dict], budget: int) -> None:
@@ -1059,7 +1317,9 @@ def write_manifest(out_dir: Path, plan: list[dict], budget: int) -> None:
             f"{idx:03d} suite={item['suite']} x={item['x_value']} "
             f"variant={item['variant'].label} dataset={item['dataset'].name} "
             f"scan_length={item['scan_length']} hot_ratio={item['hot_ratio']} "
-            f"warmup_ops={item['warmup_ops']} read_only={item['read_only']}"
+            f"warmup_ops={item['warmup_ops']} threads={item.get('threads', 1)} "
+            f"budget={item.get('cache_budget_bytes', budget)} direct_reads={item['direct_reads']} "
+            f"read_only={item['read_only']}"
         )
     manifest.write_text("\n".join(lines) + "\n")
 
@@ -1086,6 +1346,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--plot-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-runs", type=int, default=None)
+    parser.add_argument(
+        "--suites",
+        type=str,
+        default="",
+        help="comma-separated suite filter, e.g. scan_length,value_size,cache_budget",
+    )
     return parser.parse_args()
 
 
@@ -1102,11 +1368,13 @@ def main() -> int:
         return 0
 
     out_dir.mkdir(parents=True, exist_ok=True)
+    suites = {s.strip() for s in args.suites.split(",") if s.strip()} or None
     plan = make_plan(
         out_dir,
         budget=budget,
         measured_ops=args.measured_ops,
         direct_reads=args.direct_reads,
+        suites=suites,
     )
     write_manifest(out_dir, plan, budget)
 
@@ -1115,53 +1383,28 @@ def main() -> int:
         return 0
 
     active_plan = plan[: args.max_runs] if args.max_runs is not None else plan
-    needs_general_source = (
-        args.prepare_only
-        or args.reload_sources
-        or args.reload_general_source
-        or any(item["dataset"].name == GENERAL_DATASET.name for item in active_plan)
-    )
-    general_missing = [
-        GENERAL_DATASET
-        for engine in ("rocksdb", "blobdb", "lsbm")
-        if not GENERAL_DATASET.source_path(engine).exists()
-    ]
-    if needs_general_source and (general_missing or args.reload_sources or args.reload_general_source):
-        prepare_sources(
-            [GENERAL_DATASET],
-            budget=budget,
-            out_dir=out_dir,
-            reload=args.reload_sources or args.reload_general_source,
-        )
-
-    needs_value_sources = (
-        args.prepare_only
-        or args.reload_sources
-        or args.reload_value_sources
-        or any(item["suite"] == "value_size" for item in active_plan)
-    )
     value_datasets = [value_dataset(v) for v in [256, 512, 1024, 4096, 8192]]
-    missing = []
-    if needs_value_sources:
-        missing = [
-            dataset
-            for dataset in value_datasets
+    datasets_needed = unique_datasets(
+        [item["dataset"] for item in active_plan]
+        + ([GENERAL_DATASET, CACHE_PRESSURE_DATASET, *value_datasets] if args.prepare_only else [])
+    )
+    for dataset in datasets_needed:
+        missing = any(
+            not dataset.source_path(engine).exists()
             for engine in ("rocksdb", "blobdb", "lsbm")
-            if not dataset.source_path(engine).exists()
-        ]
-    if needs_value_sources and (missing or args.reload_sources or args.reload_value_sources):
-        unique = []
-        seen = set()
-        for dataset in value_datasets:
-            if dataset.name not in seen:
-                seen.add(dataset.name)
-                unique.append(dataset)
-        prepare_sources(
-            unique,
-            budget=budget,
-            out_dir=out_dir,
-            reload=args.reload_sources or args.reload_value_sources,
         )
+        reload_dataset = args.reload_sources
+        if dataset.name == GENERAL_DATASET.name:
+            reload_dataset = reload_dataset or args.reload_general_source
+        if dataset.name in {d.name for d in value_datasets}:
+            reload_dataset = reload_dataset or args.reload_value_sources
+        if missing or reload_dataset:
+            prepare_sources(
+                [dataset],
+                budget=budget,
+                out_dir=out_dir,
+                reload=reload_dataset,
+            )
 
     if args.prepare_only:
         return 0
@@ -1169,6 +1412,7 @@ def main() -> int:
     rows = execute_plan(plan, out_dir=out_dir, budget=budget, max_runs=args.max_runs)
     summary = out_dir / "summary.csv"
     write_summary(rows, summary)
+    write_anomaly_report(rows, out_dir / "anomaly_report.md")
     make_figures(summary, figure_dir)
     print(f"summary={summary}")
     print(f"figures={figure_dir}")
