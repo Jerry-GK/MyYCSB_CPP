@@ -1267,49 +1267,57 @@ def make_grouped_metric_figure(
 
 def make_figures(summary: Path, figure_dir: Path) -> None:
     rows = load_rows(summary)
-    make_metric_row(
-        rows,
-        suite="scan_length",
-        out_path=figure_dir / "eval_fair_scan_length.pdf",
-        title_prefix="scan length",
-    )
-    make_metric_row(
-        rows,
-        suite="value_size",
-        out_path=figure_dir / "eval_fair_value_size.pdf",
-        title_prefix="value size",
-    )
-    make_metric_row(
-        rows,
-        suite="large_value_scan_length",
-        out_path=figure_dir / "eval_large_value_scan_length.pdf",
-        title_prefix="8KB scan length",
-    )
-    make_workload_figure(rows, figure_dir / "eval_fair_workload.pdf")
-    make_metric_row(
-        rows,
-        suite="cache_budget",
-        out_path=figure_dir / "eval_cache_budget.pdf",
-        title_prefix="cache budget",
-    )
-    make_grouped_metric_figure(
-        rows,
-        suite="warmup",
-        metric="throughputops/sec",
-        transform=lambda v: v / 1000.0,
-        ylabel="Kops/s",
-        out_path=figure_dir / "eval_warmup_curve.pdf",
-        title="warmup sensitivity",
-    )
-    make_grouped_metric_figure(
-        rows,
-        suite="threads",
-        metric="throughputops/sec",
-        transform=lambda v: v / 1000.0,
-        ylabel="Kops/s",
-        out_path=figure_dir / "eval_scanonly_threads.pdf",
-        title="scan-only scaling",
-    )
+    suites = {str(row.get("suite")) for row in rows}
+    if "scan_length" in suites:
+        make_metric_row(
+            rows,
+            suite="scan_length",
+            out_path=figure_dir / "eval_fair_scan_length.pdf",
+            title_prefix="scan length",
+        )
+    if "value_size" in suites:
+        make_metric_row(
+            rows,
+            suite="value_size",
+            out_path=figure_dir / "eval_fair_value_size.pdf",
+            title_prefix="value size",
+        )
+    if "large_value_scan_length" in suites:
+        make_metric_row(
+            rows,
+            suite="large_value_scan_length",
+            out_path=figure_dir / "eval_large_value_scan_length.pdf",
+            title_prefix="8KB scan length",
+        )
+    if "workload" in suites:
+        make_workload_figure(rows, figure_dir / "eval_fair_workload.pdf")
+    if "cache_budget" in suites:
+        make_metric_row(
+            rows,
+            suite="cache_budget",
+            out_path=figure_dir / "eval_cache_budget.pdf",
+            title_prefix="cache budget",
+        )
+    if "warmup" in suites:
+        make_grouped_metric_figure(
+            rows,
+            suite="warmup",
+            metric="throughputops/sec",
+            transform=lambda v: v / 1000.0,
+            ylabel="Kops/s",
+            out_path=figure_dir / "eval_warmup_curve.pdf",
+            title="warmup sensitivity",
+        )
+    if "threads" in suites:
+        make_grouped_metric_figure(
+            rows,
+            suite="threads",
+            metric="throughputops/sec",
+            transform=lambda v: v / 1000.0,
+            ylabel="Kops/s",
+            out_path=figure_dir / "eval_scanonly_threads.pdf",
+            title="scan-only scaling",
+        )
 
 
 def write_anomaly_report(rows: list[dict], path: Path) -> None:
