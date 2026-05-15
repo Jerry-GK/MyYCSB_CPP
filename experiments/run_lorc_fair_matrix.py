@@ -119,6 +119,8 @@ METRIC_RE = re.compile(
 SIMPLE_RE = re.compile(r"Run (?P<name>[^:]+): (?P<value>[-\d.]+)")
 LORC_STATS_RE = re.compile(r"\[LORC_STATS\]\s+(?P<body>.*)")
 RSS_RE = re.compile(r"Maximum resident set size \(kbytes\):\s+(?P<rss>\d+)")
+FS_IN_RE = re.compile(r"File system inputs:\s+(?P<value>\d+)")
+FS_OUT_RE = re.compile(r"File system outputs:\s+(?P<value>\d+)")
 
 
 def shell_quote(parts: Iterable[str]) -> str:
@@ -372,10 +374,17 @@ def parse_time_file(path: Path) -> dict[str, int]:
     if not path.exists():
         return {}
     text = path.read_text(errors="replace")
+    result: dict[str, int] = {}
     match = RSS_RE.search(text)
-    if not match:
-        return {}
-    return {"max_rss_kb": int(match.group("rss"))}
+    if match:
+        result["max_rss_kb"] = int(match.group("rss"))
+    match = FS_IN_RE.search(text)
+    if match:
+        result["fs_inputs"] = int(match.group("value"))
+    match = FS_OUT_RE.search(text)
+    if match:
+        result["fs_outputs"] = int(match.group("value"))
+    return result
 
 
 def run_ycsb(
@@ -757,6 +766,8 @@ SUMMARY_KEYS = [
     "configured_total_cache_bytes",
     "max_rss_kb",
     "rss_to_cache_budget",
+    "fs_inputs",
+    "fs_outputs",
     "lorc_current_size",
     "lorc_capacity",
     "lorc_total_range_length",
