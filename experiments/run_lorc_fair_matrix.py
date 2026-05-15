@@ -118,6 +118,7 @@ METRIC_RE = re.compile(
 )
 SIMPLE_RE = re.compile(r"Run (?P<name>[^:]+): (?P<value>[-\d.]+)")
 LORC_STATS_RE = re.compile(r"\[LORC_STATS\]\s+(?P<body>.*)")
+ROCKSDB_STATS_RE = re.compile(r"\[ROCKSDB_STATS\]\s+(?P<body>.*)")
 RSS_RE = re.compile(r"Maximum resident set size \(kbytes\):\s+(?P<rss>\d+)")
 FS_IN_RE = re.compile(r"File system inputs:\s+(?P<value>\d+)")
 FS_OUT_RE = re.compile(r"File system outputs:\s+(?P<value>\d+)")
@@ -364,6 +365,16 @@ def parse_log(text: str) -> dict[str, float | int | str]:
                 out[f"lorc_{key}"] = float(value)
             except ValueError:
                 out[f"lorc_{key}"] = value
+
+    for match in ROCKSDB_STATS_RE.finditer(text):
+        for token in match.group("body").split():
+            if "=" not in token:
+                continue
+            key, value = token.split("=", 1)
+            try:
+                out[f"rocksdb_{key}"] = float(value)
+            except ValueError:
+                out[f"rocksdb_{key}"] = value
 
     if "measured_throughputops/sec" in out:
         out["throughputops/sec"] = out["measured_throughputops/sec"]
@@ -906,7 +917,7 @@ def grouped_bars(
 
 def make_metric_row(rows: list[dict], *, suite: str, out_path: Path, title_prefix: str) -> None:
     setup_style()
-    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.05), constrained_layout=True)
+    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.2), constrained_layout=True)
     grouped_bars(
         axes[0],
         rows,
@@ -938,13 +949,13 @@ def make_metric_row(rows: list[dict], *, suite: str, out_path: Path, title_prefi
         labels,
         loc="upper center",
         ncol=5,
-        bbox_to_anchor=(0.5, 1.08),
+        bbox_to_anchor=(0.5, 1.12),
         frameon=False,
         columnspacing=1.0,
         handlelength=1.2,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path)
+    fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
 
 
@@ -987,7 +998,7 @@ def make_memory_figure(rows: list[dict], out_path: Path) -> None:
     ax.set_axisbelow(True)
     ax.legend(frameon=False, ncol=2, loc="upper center", bbox_to_anchor=(0.5, 1.22))
     out_path.parent.mkdir(parents=True, exist_ok=True)
-    fig.savefig(out_path)
+    fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
 
 
