@@ -968,7 +968,7 @@ def make_metric_row(rows: list[dict], *, suite: str, out_path: Path, title_prefi
 
 def make_memory_figure(rows: list[dict], out_path: Path) -> None:
     setup_style()
-    fig, ax = plt.subplots(figsize=(7.2, 2.2), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(7.2, 2.35), constrained_layout=True)
     main_rows = [
         r
         for r in rows
@@ -1000,10 +1000,9 @@ def make_memory_figure(rows: list[dict], out_path: Path) -> None:
     ax.set_xticks(centers)
     ax.set_xticklabels(labels, rotation=14, ha="right")
     ax.set_ylabel("MB")
-    ax.set_title("Memory check at scan length 20")
     ax.grid(axis="y", color="#e1e1e1", linewidth=0.55)
     ax.set_axisbelow(True)
-    ax.legend(frameon=False, ncol=2, loc="upper center", bbox_to_anchor=(0.5, 1.22))
+    ax.legend(frameon=False, ncol=2, loc="upper left")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
@@ -1035,7 +1034,6 @@ def make_figures(summary: Path, figure_dir: Path) -> None:
         out_path=figure_dir / "eval_fair_workload.pdf",
         title_prefix="workload",
     )
-    make_memory_figure(rows, figure_dir / "eval_fair_memory.pdf")
 
 
 def write_manifest(out_dir: Path, plan: list[dict], budget: int) -> None:
