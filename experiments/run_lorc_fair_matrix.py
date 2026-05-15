@@ -287,6 +287,9 @@ def warmup_ops_for(
     coverage_factor: float,
 ) -> int:
     hot_records = max(1, int(dataset.recordcount * hot_ratio))
+    # Warmup remains randomized by the workload generator. The factor controls
+    # expected random scan coverage; e.g., factor 20 is effectively full for
+    # the hot regions used in the short-scan experiments.
     coverage_ops = math.ceil(coverage_factor * hot_records / max(scan_length, 1))
     return max(min_warmup_ops, coverage_ops)
 
@@ -540,7 +543,7 @@ def make_plan(
         scan_prop: float = 1.0,
         requestdistribution: str = "zipfian",
         min_warmup_ops: int = 20_000,
-        coverage_factor: float = 1.0,
+        coverage_factor: float = 20.0,
         timeout: int = 1200,
     ) -> None:
         name = (
@@ -594,7 +597,7 @@ def make_plan(
             dataset=GENERAL_DATASET,
             scan_length=scan_length,
             min_warmup_ops=40_000,
-            coverage_factor=2.0,
+            coverage_factor=20.0,
         )
 
     for hot_ratio in [0.01, 0.02, 0.05, 0.10, 0.20]:
@@ -605,7 +608,7 @@ def make_plan(
             dataset=GENERAL_DATASET,
             hot_ratio=hot_ratio,
             min_warmup_ops=40_000,
-            coverage_factor=1.5,
+            coverage_factor=20.0,
         )
 
     for value_size in [256, 512, 1024, 4096, 8192]:
@@ -617,7 +620,7 @@ def make_plan(
             dataset=dataset,
             scan_length=50,
             min_warmup_ops=30_000,
-            coverage_factor=2.0,
+            coverage_factor=20.0,
             timeout=1800,
         )
 
@@ -637,7 +640,7 @@ def make_plan(
             update_prop=update_prop,
             scan_prop=scan_prop,
             min_warmup_ops=40_000,
-            coverage_factor=1.5,
+            coverage_factor=20.0,
             timeout=1800 if update_prop > 0 else 1200,
         )
 
@@ -1049,6 +1052,7 @@ def write_manifest(out_dir: Path, plan: list[dict], budget: int) -> None:
         "BlobDB+LORC:   range=budget, block=0, blob=0",
         "LSbM:          block=budget",
         "Compression:   disabled for RocksDB, BlobDB, and LSbM",
+        "Warmup:        two boundary scans, then randomized scan warmup from the configured request distribution",
         "",
         "Plan:",
     ]
@@ -1056,7 +1060,8 @@ def write_manifest(out_dir: Path, plan: list[dict], budget: int) -> None:
         lines.append(
             f"{idx:03d} suite={item['suite']} x={item['x_value']} "
             f"variant={item['variant'].label} dataset={item['dataset'].name} "
-            f"read_only={item['read_only']}"
+            f"scan_length={item['scan_length']} hot_ratio={item['hot_ratio']} "
+            f"warmup_ops={item['warmup_ops']} read_only={item['read_only']}"
         )
     manifest.write_text("\n".join(lines) + "\n")
 

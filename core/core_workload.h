@@ -203,7 +203,8 @@ class CoreWorkload {
       field_count_(0), read_all_fields_(false), write_all_fields_(false),
       field_len_generator_(nullptr), key_chooser_(nullptr), hot_key_chooser_(nullptr), field_chooser_(nullptr),
       scan_len_chooser_(nullptr), insert_key_sequence_(nullptr),
-      transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), random_inserts_(false), record_count_(0), hot_data_ratio_(1.0), warmup_ratio_(0.0) {
+      transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), random_inserts_(false), record_count_(0),
+      max_scan_len_(0), hot_data_ratio_(1.0), warmup_ratio_(0.0) {
   }
 
   virtual ~CoreWorkload() {

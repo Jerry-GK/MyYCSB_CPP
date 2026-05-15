@@ -202,6 +202,7 @@ int main(const int argc, const char *argv[]) {
     ycsbc::utils::CountDownLatch warmup_latch(num_threads);
     std::atomic<bool> measurement_started(false);
     ycsbc::utils::Timer<double> measurement_timer;
+    ycsbc::utils::CountDownLatch measurement_latch(num_threads);
     
     std::vector<std::future<int>> client_threads;
     std::vector<ycsbc::utils::RateLimiter *> rate_limiters;
@@ -219,6 +220,7 @@ int main(const int argc, const char *argv[]) {
       client_threads.emplace_back(std::async(std::launch::async, ycsbc::ClientThreadWithWarmup, dbs[i], &wl,
                                              thread_ops, false, !do_load, true, &latch, &warmup_latch, 
                                              &measurement_started, &measurement_timer, 
+                                             &measurement_latch,
                                              warmup_ops / num_threads + (i < warmup_ops % num_threads ? 1 : 0), rlim));
     }
 
@@ -229,13 +231,15 @@ int main(const int argc, const char *argv[]) {
 
     assert((int)client_threads.size() == num_threads);
 
+    measurement_latch.Await();
+    double measurement_runtime = measurement_timer.End();
+
     int sum = 0;
     for (auto &n : client_threads) {
       assert(n.valid());
       sum += n.get();
     }
     double total_runtime = timer.End();
-    double measurement_runtime = measurement_timer.End();
 
     if (show_status) {
       status_future.wait();
@@ -352,4 +356,3 @@ void UsageMessage(const char *command) {
 inline bool StrStartWith(const char *str, const char *pre) {
   return strncmp(str, pre, strlen(pre)) == 0;
 }
-

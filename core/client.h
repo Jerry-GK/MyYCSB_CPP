@@ -59,7 +59,9 @@ inline int ClientThread(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_op
 inline int ClientThreadWithWarmup(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const int num_ops, bool is_loading,
                                   bool init_db, bool cleanup_db, utils::CountDownLatch *latch, 
                                   utils::CountDownLatch *warmup_latch, std::atomic<bool> *measurement_started,
-                                  utils::Timer<double> *measurement_timer, const int warmup_ops, utils::RateLimiter *rlim) {
+                                  utils::Timer<double> *measurement_timer,
+                                  utils::CountDownLatch *measurement_latch,
+                                  const int warmup_ops, utils::RateLimiter *rlim) {
 
   try {
     if (init_db) {
@@ -93,6 +95,8 @@ inline int ClientThreadWithWarmup(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const 
       }
       ops++;
     }
+
+    measurement_latch->CountDown();
 
     if (cleanup_db) {
       db->Cleanup();
