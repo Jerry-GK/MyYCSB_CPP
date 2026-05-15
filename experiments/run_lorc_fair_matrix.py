@@ -1162,6 +1162,43 @@ def make_line_figure(
     plt.close(fig)
 
 
+def make_grouped_metric_figure(
+    rows: list[dict],
+    *,
+    suite: str,
+    metric: str,
+    transform=lambda x: x,
+    ylabel: str,
+    out_path: Path,
+    title: str,
+) -> None:
+    setup_style()
+    fig, ax = plt.subplots(figsize=(7.2, 2.35), constrained_layout=True)
+    grouped_bars(
+        ax,
+        rows,
+        metric=metric,
+        transform=transform,
+        ylabel=ylabel,
+        suite=suite,
+        title=title,
+    )
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=5,
+        bbox_to_anchor=(0.5, 1.15),
+        frameon=False,
+        columnspacing=1.0,
+        handlelength=1.2,
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
 def make_figures(summary: Path, figure_dir: Path) -> None:
     rows = load_rows(summary)
     make_metric_row(
@@ -1188,23 +1225,21 @@ def make_figures(summary: Path, figure_dir: Path) -> None:
         out_path=figure_dir / "eval_cache_budget.pdf",
         title_prefix="cache budget",
     )
-    make_line_figure(
+    make_grouped_metric_figure(
         rows,
         suite="warmup",
         metric="throughputops/sec",
         transform=lambda v: v / 1000.0,
         ylabel="Kops/s",
-        xlabel="randomized warmup coverage",
         out_path=figure_dir / "eval_warmup_curve.pdf",
         title="warmup sensitivity",
     )
-    make_line_figure(
+    make_grouped_metric_figure(
         rows,
         suite="threads",
         metric="throughputops/sec",
         transform=lambda v: v / 1000.0,
         ylabel="Kops/s",
-        xlabel="client threads",
         out_path=figure_dir / "eval_scanonly_threads.pdf",
         title="scan-only scaling",
     )
