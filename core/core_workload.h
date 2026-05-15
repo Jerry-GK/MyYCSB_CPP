@@ -169,6 +169,7 @@ class CoreWorkload {
   /// Zipfian constant for transaction key generation.
   ///
   static const std::string ZIPFIAN_CONST_PROPERTY;
+  static const std::string PHASED_RANGES_PROPERTY;
 
   ///
   /// Hot data ratio for read/scan operations (0.0-1.0).

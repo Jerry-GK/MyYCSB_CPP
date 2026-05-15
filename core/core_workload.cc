@@ -12,6 +12,7 @@
 #include "scrambled_zipfian_generator.h"
 #include "skewed_latest_generator.h"
 #include "const_generator.h"
+#include "phased_generator.h"
 #include "core_workload.h"
 #include "random_byte_generator.h"
 #include "random_counter_generator.h"
@@ -101,6 +102,7 @@ const std::string CoreWorkload::FIELD_NAME_PREFIX = "fieldnameprefix";
 const std::string CoreWorkload::FIELD_NAME_PREFIX_DEFAULT = "field";
 
 const std::string CoreWorkload::ZIPFIAN_CONST_PROPERTY = "zipfian_const";
+const std::string CoreWorkload::PHASED_RANGES_PROPERTY = "phased_ranges";
 
 const string CoreWorkload::HOT_DATA_RATIO_PROPERTY = "hot_data_ratio";
 const string CoreWorkload::HOT_DATA_RATIO_DEFAULT = "1.0";
@@ -224,6 +226,8 @@ void CoreWorkload::Init(const utils::Properties &p) {
     } else {
       key_chooser_ = new SkewedLatestGenerator(*static_cast<AcknowledgedCounterGenerator*>(transaction_insert_key_sequence_));
     }
+  } else if (request_dist == "phased") {
+    key_chooser_ = new PhasedGenerator(p.GetProperty(PHASED_RANGES_PROPERTY));
   } else {
     throw utils::Exception("Unknown request distribution: " + request_dist);
   }
@@ -246,6 +250,8 @@ void CoreWorkload::Init(const utils::Properties &p) {
     } else {
       hot_key_chooser_ = new SkewedLatestGenerator(*static_cast<AcknowledgedCounterGenerator*>(transaction_insert_key_sequence_));
     }
+  } else if (request_dist == "phased") {
+    hot_key_chooser_ = new PhasedGenerator(p.GetProperty(PHASED_RANGES_PROPERTY));
   } else {
     throw utils::Exception("Unknown request distribution: " + request_dist);
   }
