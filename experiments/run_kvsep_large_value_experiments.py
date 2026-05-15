@@ -458,6 +458,16 @@ COLORS = {
     "BlobDB": "#59A14F",
     "BlobDB+LORC": "#E15759",
 }
+MARKERS = {
+    "RocksDB": "o",
+    "BlobDB": "^",
+    "BlobDB+LORC": "D",
+}
+LINE_STYLES = {
+    "RocksDB": "-",
+    "BlobDB": "--",
+    "BlobDB+LORC": "--",
+}
 
 SHORT_LABEL = {
     "RocksDB": "RocksDB",
@@ -537,7 +547,76 @@ def grouped_bar(
     plt.close(fig)
 
 
-def grouped_by_setting(
+def line_by_setting(
+    rows: list[dict[str, str]],
+    prefix: str,
+    x_key: str,
+    metric: str,
+    xlabel: str,
+    ylabel: str,
+    out: Path,
+    *,
+    logy: bool = False,
+) -> None:
+    fig, ax = plt.subplots(figsize=(3.7, 2.35))
+    wanted = [
+        "RocksDB",
+        "BlobDB",
+        "BlobDB+LORC",
+    ]
+    x_values = sorted(
+        {
+            f(r, x_key)
+            for r in rows
+            if r["experiment"].startswith(prefix) and r.get("returncode", "1") == "0"
+        }
+    )
+    for label in wanted:
+        values = []
+        xs = []
+        for position, x_value in enumerate(x_values):
+            row = next(
+                (
+                    r for r in rows
+                    if r["experiment"].startswith(prefix)
+                    and r["variant"] == label
+                    and r.get("returncode", "1") == "0"
+                    and f(r, x_key) == x_value
+                ),
+                None,
+            )
+            value = f(row, metric) if row else math.nan
+            if not math.isfinite(value):
+                continue
+            xs.append(position)
+            values.append(value)
+        ax.plot(
+            xs,
+            values,
+            color=COLORS[label],
+            linestyle=LINE_STYLES[label],
+            marker=MARKERS[label],
+            linewidth=1.45,
+            markersize=4.1,
+            markeredgecolor="white",
+            markeredgewidth=0.35,
+            label=SHORT_LABEL[label].replace("\n", " "),
+        )
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if logy:
+        ax.set_yscale("log")
+    ax.set_xticks(list(range(len(x_values))))
+    ax.set_xticklabels([str(int(x)) if float(x).is_integer() else f"{x:g}" for x in x_values])
+    ax.grid(axis="both", color="#dddddd", linewidth=0.55, alpha=0.85)
+    ax.set_axisbelow(True)
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:,.0f}"))
+    ax.legend(frameon=False, ncol=1, fontsize=7.0)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+def bar_by_setting(
     rows: list[dict[str, str]],
     prefix: str,
     x_key: str,
@@ -617,32 +696,37 @@ def cache_diagnostic(rows: list[dict[str, str]], out: Path) -> None:
         and r.get("returncode", "1") == "0"
     ]
     lengths = sorted({f(r, "scan_length") for r in subset})
-    variants = ["BlobDB", "BlobDB+LORC"]
     fig, ax = plt.subplots(figsize=(3.7, 2.35))
-    centers = list(range(len(lengths)))
-    width = 0.30
-    for i, label in enumerate(variants):
-        values = []
-        for length in lengths:
-            row = next((r for r in subset if r["variant"] == label and f(r, "scan_length") == length), None)
-            values.append(f(row, "rocksdb_blob_file_bytes_read") / MB if row else math.nan)
-        ax.bar(
-            [c + (i - 0.5) * width for c in centers],
-            values,
-            width=width,
-            color=COLORS[label],
-            edgecolor="#303030",
-            linewidth=0.35,
-            label=SHORT_LABEL[label].replace("\n", " "),
-        )
-    ax.set_ylabel("Blob file bytes (MB)")
+    xs: list[int] = []
+    values: list[float] = []
+    for position, length in enumerate(lengths):
+        native = next((r for r in subset if r["variant"] == "BlobDB" and f(r, "scan_length") == length), None)
+        lorc = next((r for r in subset if r["variant"] == "BlobDB+LORC" and f(r, "scan_length") == length), None)
+        native_mb = f(native, "rocksdb_blob_file_bytes_read") / MB if native else math.nan
+        lorc_mb = f(lorc, "rocksdb_blob_file_bytes_read") / MB if lorc else math.nan
+        if not math.isfinite(native_mb) or not math.isfinite(lorc_mb) or lorc_mb <= 0:
+            continue
+        xs.append(position)
+        values.append(native_mb / lorc_mb)
+    ax.plot(
+        xs,
+        values,
+        color="#59A14F",
+        linestyle="-",
+        marker="o",
+        linewidth=1.55,
+        markersize=4.2,
+        markeredgecolor="white",
+        markeredgewidth=0.35,
+    )
+    ax.axhline(1.0, color="#555555", linewidth=0.7, linestyle=":")
+    ax.set_ylabel("Blob traffic ratio")
     ax.set_xlabel("Scan length")
-    ax.set_xticks(centers)
+    ax.set_xticks(list(range(len(lengths))))
     ax.set_xticklabels([str(int(x)) if float(x).is_integer() else f"{x:g}" for x in lengths])
-    ax.grid(axis="y", color="#dddddd", linewidth=0.55, alpha=0.85)
+    ax.grid(axis="both", color="#dddddd", linewidth=0.55, alpha=0.85)
     ax.set_axisbelow(True)
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:,.0f}"))
-    ax.legend(frameon=False, ncol=1, fontsize=7.0)
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:.1f}x"))
     fig.savefig(out)
     plt.close(fig)
 
@@ -686,13 +770,18 @@ def generate_figures(summary: Path, fig_dir: Path) -> list[Path]:
     figs: list[Path] = []
 
     if any(r["experiment"].startswith("kvsep_scan_length_") for r in rows):
-        for metric, ylabel, name, logy in [
-            ("throughputops/sec", "Throughput (scans/s)", "eval_kvsep_scanlen_throughput.pdf", False),
-            ("scan_p99_us", "p99 scan latency (us)", "eval_kvsep_scanlen_p99.pdf", True),
-        ]:
-            fig = fig_dir / name
-            grouped_by_setting(rows, "kvsep_scan_length_", "scan_length", metric, "Scan length", ylabel, fig, logy=logy)
-            figs.append(fig)
+        fig = fig_dir / "eval_kvsep_scanlen_p99.pdf"
+        bar_by_setting(
+            rows,
+            "kvsep_scan_length_",
+            "scan_length",
+            "scan_p99_us",
+            "Scan length",
+            "p99 scan latency (us)",
+            fig,
+            logy=True,
+        )
+        figs.append(fig)
         fig = fig_dir / "eval_kvsep_blob_bytes.pdf"
         cache_diagnostic(rows, fig)
         figs.append(fig)
@@ -703,7 +792,7 @@ def generate_figures(summary: Path, fig_dir: Path) -> list[Path]:
             ("scan_p99_us", "p99 scan latency (us)", "eval_kvsep_hotratio_p99.pdf", True),
         ]:
             fig = fig_dir / name
-            grouped_by_setting(rows, "kvsep_hot_ratio_", "hot_ratio", metric, "Hot region ratio", ylabel, fig, logy=logy)
+            bar_by_setting(rows, "kvsep_hot_ratio_", "hot_ratio", metric, "Hot region ratio", ylabel, fig, logy=logy)
             figs.append(fig)
     return figs
 
@@ -753,7 +842,9 @@ def main() -> None:
 
     paper_fig_dir = PAPER / "figures" / "experiments"
     figs = generate_figures(summary, paper_fig_dir)
-    shutil.copy2(summary, PAPER / "figures" / "experiments" / "lorc_kvsep_large_value_summary.csv")
+    paper_summary = PAPER / "figures" / "experiments" / "lorc_kvsep_large_value_summary.csv"
+    if summary.resolve() != paper_summary.resolve():
+        shutil.copy2(summary, paper_summary)
     print(f"[summary] {summary}")
     for fig in figs:
         print(f"[figure] {fig}")

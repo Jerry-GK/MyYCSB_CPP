@@ -958,6 +958,20 @@ HATCHES = {
     "LSbM": "",
 }
 VARIANT_ORDER = [v.label for v in VARIANTS]
+LINE_MARKERS = {
+    "RocksDB": "o",
+    "RocksDB+LORC": "s",
+    "BlobDB": "^",
+    "BlobDB+LORC": "D",
+    "LSbM": "P",
+}
+LINE_STYLES = {
+    "RocksDB": "-",
+    "RocksDB+LORC": "-",
+    "BlobDB": "--",
+    "BlobDB+LORC": "--",
+    "LSbM": ":",
+}
 
 
 def setup_style() -> None:
@@ -1031,6 +1045,70 @@ def grouped_bars(
     ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:,.0f}"))
 
 
+def sorted_x_pairs(suite_rows: list[dict]) -> list[tuple[float, str, str]]:
+    pairs: dict[str, tuple[float, str, str]] = {}
+    for row in suite_rows:
+        x_value = str(row["x_value"])
+        try:
+            x_numeric = float(x_value)
+        except ValueError:
+            x_numeric = float(len(pairs))
+        pairs.setdefault(x_value, (x_numeric, x_value, str(row["x_label"])))
+    return sorted(pairs.values(), key=lambda item: item[0])
+
+
+def plot_metric_lines(
+    ax,
+    rows: list[dict],
+    *,
+    metric: str,
+    transform=lambda x: x,
+    ylabel: str,
+    suite: str,
+    title: str,
+    log: bool = False,
+) -> None:
+    suite_rows = [r for r in rows if r["suite"] == suite]
+    x_pairs = sorted_x_pairs(suite_rows)
+    variants = [v for v in VARIANT_ORDER if any(r["variant"] == v for r in suite_rows)]
+
+    for variant in variants:
+        xs: list[float] = []
+        values: list[float] = []
+        for position, (_, x_value, _) in enumerate(x_pairs):
+            row = next(
+                (r for r in suite_rows if r["variant"] == variant and r["x_value"] == x_value),
+                None,
+            )
+            value = transform(as_float(row, metric))
+            if not math.isfinite(value):
+                continue
+            xs.append(float(position))
+            values.append(value)
+        ax.plot(
+            xs,
+            values,
+            color=COLORS[variant],
+            linestyle=LINE_STYLES[variant],
+            marker=LINE_MARKERS[variant],
+            linewidth=1.45,
+            markersize=4.1,
+            markeredgecolor="white",
+            markeredgewidth=0.35,
+            label=variant,
+        )
+
+    ax.set_title(title)
+    ax.set_ylabel(ylabel)
+    if log:
+        ax.set_yscale("log")
+    ax.set_xticks(list(range(len(x_pairs))))
+    ax.set_xticklabels([label for _, _, label in x_pairs])
+    ax.grid(axis="both", color="#e1e1e1", linewidth=0.55)
+    ax.set_axisbelow(True)
+    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:,.0f}"))
+
+
 def make_metric_row(rows: list[dict], *, suite: str, out_path: Path, title_prefix: str) -> None:
     setup_style()
     fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.2), constrained_layout=True)
@@ -1069,6 +1147,50 @@ def make_metric_row(rows: list[dict], *, suite: str, out_path: Path, title_prefi
         frameon=False,
         columnspacing=1.0,
         handlelength=1.2,
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def make_metric_line_row(rows: list[dict], *, suite: str, out_path: Path, title_prefix: str) -> None:
+    setup_style()
+    fig, axes = plt.subplots(1, 3, figsize=(7.2, 2.2), constrained_layout=True)
+    plot_metric_lines(
+        axes[0],
+        rows,
+        metric="throughputops/sec",
+        transform=lambda v: v / 1000.0,
+        ylabel="Kops/s",
+        suite=suite,
+        title=f"{title_prefix}: throughput",
+    )
+    plot_metric_lines(
+        axes[1],
+        rows,
+        metric="scan_avg_us",
+        ylabel="avg scan (us)",
+        suite=suite,
+        title=f"{title_prefix}: average",
+    )
+    plot_metric_lines(
+        axes[2],
+        rows,
+        metric="scan_p99_us",
+        ylabel="p99 scan (us)",
+        suite=suite,
+        title=f"{title_prefix}: p99",
+    )
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=5,
+        bbox_to_anchor=(0.5, 1.12),
+        frameon=False,
+        columnspacing=1.0,
+        handlelength=1.7,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, bbox_inches="tight")
@@ -1228,6 +1350,95 @@ def make_line_figure(
     plt.close(fig)
 
 
+def make_line_metric_figure(
+    rows: list[dict],
+    *,
+    suite: str,
+    metric: str,
+    transform=lambda x: x,
+    ylabel: str,
+    out_path: Path,
+    title: str,
+) -> None:
+    setup_style()
+    fig, ax = plt.subplots(figsize=(3.45, 2.15), constrained_layout=True)
+    plot_metric_lines(
+        ax,
+        rows,
+        metric=metric,
+        transform=transform,
+        ylabel=ylabel,
+        suite=suite,
+        title=title,
+    )
+    ax.set_xlabel("threads" if suite == "threads" else "warmup coverage factor")
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=2,
+        bbox_to_anchor=(0.5, 1.25),
+        frameon=False,
+        columnspacing=0.8,
+        handlelength=1.7,
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
+def make_thread_pair_line_figure(rows: list[dict], out_path: Path) -> None:
+    setup_style()
+    suite = "threads"
+    suite_rows = [r for r in rows if r["suite"] == suite]
+    if not suite_rows:
+        return
+    x_pairs = sorted_x_pairs(suite_rows)
+    panels = [
+        ("RocksDB family", ["RocksDB", "RocksDB+LORC"]),
+        ("BlobDB family", ["BlobDB", "BlobDB+LORC"]),
+    ]
+    fig, axes = plt.subplots(2, 1, figsize=(3.45, 3.35), constrained_layout=True, sharex=True)
+    for ax, (title, variants) in zip(axes, panels):
+        for variant in variants:
+            xs: list[float] = []
+            values: list[float] = []
+            for position, (_, x_value, _) in enumerate(x_pairs):
+                row = next(
+                    (r for r in suite_rows if r["variant"] == variant and r["x_value"] == x_value),
+                    None,
+                )
+                value = as_float(row, "throughputops/sec") / 1000.0
+                if not math.isfinite(value):
+                    continue
+                xs.append(float(position))
+                values.append(value)
+            ax.plot(
+                xs,
+                values,
+                color=COLORS[variant],
+                linestyle=LINE_STYLES[variant],
+                marker=LINE_MARKERS[variant],
+                linewidth=1.55,
+                markersize=4.1,
+                markeredgecolor="white",
+                markeredgewidth=0.35,
+                label=variant,
+            )
+        ax.set_title(title)
+        ax.set_xlabel("threads")
+        ax.set_xticks(list(range(len(x_pairs))))
+        ax.set_xticklabels([label for _, _, label in x_pairs])
+        ax.grid(axis="both", color="#e1e1e1", linewidth=0.55)
+        ax.set_axisbelow(True)
+        ax.legend(frameon=False, loc="upper left")
+    axes[0].set_ylabel("Kops/s")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
 def make_grouped_metric_figure(
     rows: list[dict],
     *,
@@ -1239,7 +1450,7 @@ def make_grouped_metric_figure(
     title: str,
 ) -> None:
     setup_style()
-    fig, ax = plt.subplots(figsize=(7.2, 2.35), constrained_layout=True)
+    fig, ax = plt.subplots(figsize=(3.45, 2.15), constrained_layout=True)
     grouped_bars(
         ax,
         rows,
@@ -1254,10 +1465,10 @@ def make_grouped_metric_figure(
         handles,
         labels,
         loc="upper center",
-        ncol=5,
-        bbox_to_anchor=(0.5, 1.15),
+        ncol=2,
+        bbox_to_anchor=(0.5, 1.25),
         frameon=False,
-        columnspacing=1.0,
+        columnspacing=0.8,
         handlelength=1.2,
     )
     out_path.parent.mkdir(parents=True, exist_ok=True)
@@ -1309,15 +1520,7 @@ def make_figures(summary: Path, figure_dir: Path) -> None:
             title="warmup sensitivity",
         )
     if "threads" in suites:
-        make_grouped_metric_figure(
-            rows,
-            suite="threads",
-            metric="throughputops/sec",
-            transform=lambda v: v / 1000.0,
-            ylabel="Kops/s",
-            out_path=figure_dir / "eval_scanonly_threads.pdf",
-            title="scan-only scaling",
-        )
+        make_thread_pair_line_figure(rows, figure_dir / "eval_scanonly_threads.pdf")
 
 
 def write_anomaly_report(rows: list[dict], path: Path) -> None:
