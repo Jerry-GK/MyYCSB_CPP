@@ -18,10 +18,13 @@ from __future__ import annotations
 import argparse
 import csv
 import math
+import os
 import re
 import shutil
+import statistics
 import subprocess
 import sys
+import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -90,6 +93,14 @@ CACHE_PRESSURE_DATASET = Dataset(
     fieldlength=GENERAL_FIELD_LENGTH,
     source_root=ROOT / "db" / "ycsb-source-24B-1KB-256MB-cache-pressure",
     source_tag="source-24B-1KB-256MB-cache-pressure",
+)
+
+KVSEP_8KB_4GB_DATASET = Dataset(
+    name="4GB-8KB",
+    recordcount=524_288,
+    fieldlength=8192,
+    source_root=ROOT / "db" / "ycsb-source-24B-8KB-4GB",
+    source_tag="source-24B-8KB-4GB",
 )
 
 VARIANTS = [
@@ -425,6 +436,7 @@ def run_ycsb(
     props: dict[str, str],
     threads: int,
     timeout: int,
+    random_seed: int | None = None,
 ) -> tuple[int, str, dict[str, int]]:
     log_path = run_dir / f"{log_name}.log"
     time_path = run_dir / f"{log_name}.time"
@@ -454,12 +466,17 @@ def run_ycsb(
         f"===== START {log_name} {datetime.now(timezone.utc).isoformat()} =====",
         f"Command: {shell_quote(cmd)}",
         f"db_path={db_path}",
+        f"YCSB_RANDOM_SEED={random_seed if random_seed is not None else ''}",
         "",
     ]
     print(f"[{mode}] {log_name}", flush=True)
+    env = os.environ.copy()
+    if random_seed is not None:
+        env["YCSB_RANDOM_SEED"] = str(random_seed)
     proc = subprocess.run(
         cmd,
         cwd=ROOT,
+        env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
@@ -473,6 +490,16 @@ def run_ycsb(
     )
     log_path.write_text(text, errors="replace")
     return proc.returncode, text, parse_time_file(time_path)
+
+
+def run_seed(item: dict, repeat_index: int) -> int:
+    seed_key = (
+        f"{item['suite']}|{item['x_value']}|{item['dataset'].name}|"
+        f"sl={item['scan_length']}|hot={item['hot_ratio']}|"
+        f"read={item['read_prop']}|upd={item['update_prop']}|scan={item['scan_prop']}|"
+        f"threads={item.get('threads', 1)}|repeat={repeat_index}"
+    )
+    return 1 + (zlib.crc32(seed_key.encode("utf-8")) % 2_000_000_000)
 
 
 def value_dataset(value_size: int) -> Dataset:
@@ -534,6 +561,7 @@ def prepare_sources(
                 props=props,
                 threads=1,
                 timeout=7200,
+                random_seed=1,
             )
             if rc != 0:
                 raise RuntimeError(f"Load failed for {dataset.name}/{engine}\n{text[-2000:]}")
@@ -661,6 +689,22 @@ def make_plan(
             timeout=2400,
         )
 
+    for scan_length in [25, 50, 100, 200, 400]:
+        warmup_floor = 30_000 if scan_length <= 25 else 18_000
+        measured_floor = 8_000 if scan_length <= 50 else 6_000 if scan_length <= 200 else 3_000
+        add_suite(
+            suite="kvsep_4gb_scan_length",
+            x_value=str(scan_length),
+            x_label=str(scan_length),
+            dataset=KVSEP_8KB_4GB_DATASET,
+            suite_measured_ops=max(measured_floor, measured_ops // 10),
+            scan_length=scan_length,
+            hot_ratio=0.20,
+            min_warmup_ops=warmup_floor,
+            coverage_factor=10.0,
+            timeout=5400,
+        )
+
     for cache_budget_mb in [16, 32, 64, 128]:
         add_suite(
             suite="cache_budget",
@@ -736,6 +780,7 @@ def execute_plan(
     out_dir: Path,
     budget: int,
     max_runs: int | None,
+    repeat_runs: int = 1,
 ) -> list[dict]:
     rows: list[dict] = []
     if max_runs is not None:
@@ -748,111 +793,123 @@ def execute_plan(
         if not source.exists():
             raise FileNotFoundError(f"Missing source DB for {variant.label}: {source}")
 
-        db_path = source
-        work_db: Path | None = None
-        if not item["read_only"]:
-            work_db = out_dir / "workdb" / f"{idx:03d}__{item['suite']}__{item['x_value']}__{variant.key}"
-            if work_db.exists():
-                shutil.rmtree(work_db)
-            work_db.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copytree(source, work_db)
-            db_path = work_db
+        for repeat_index in range(1, repeat_runs + 1):
+            db_path = source
+            work_db: Path | None = None
+            if not item["read_only"]:
+                work_db = (
+                    out_dir
+                    / "workdb"
+                    / f"{idx:03d}__r{repeat_index:02d}__{item['suite']}__{item['x_value']}__{variant.key}"
+                )
+                if work_db.exists():
+                    shutil.rmtree(work_db)
+                work_db.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(source, work_db)
+                db_path = work_db
 
-        run_budget = int(item.get("cache_budget_bytes", budget))
-        props = system_props(variant, run_budget, direct_reads=item["direct_reads"])
-        if item["read_only"]:
-            props.update(read_only_props(variant))
-        elif variant.engine == "lsbm":
-            props.update(
-                {
-                    "leveldb.destroy": "false",
-                    "leveldb.run_compaction": "true",
-                    "leveldb.compaction_buffer_trim_interval": "30",
-                }
-            )
-        else:
-            props.update(
-                {
-                    "rocksdb.disable_auto_compactions": "false",
-                    "rocksdb.create_if_missing": "false",
-                    "rocksdb.destroy": "false",
-                    "rocksdb.read_only": "false",
-                }
-            )
-        if item.get("single_thread_warmup"):
-            props["singlethreadwarmup"] = "true"
+            run_budget = int(item.get("cache_budget_bytes", budget))
+            props = system_props(variant, run_budget, direct_reads=item["direct_reads"])
+            if item["read_only"]:
+                props.update(read_only_props(variant))
+            elif variant.engine == "lsbm":
+                props.update(
+                    {
+                        "leveldb.destroy": "false",
+                        "leveldb.run_compaction": "true",
+                        "leveldb.compaction_buffer_trim_interval": "30",
+                    }
+                )
+            else:
+                props.update(
+                    {
+                        "rocksdb.disable_auto_compactions": "false",
+                        "rocksdb.create_if_missing": "false",
+                        "rocksdb.destroy": "false",
+                        "rocksdb.read_only": "false",
+                    }
+                )
+            if item.get("single_thread_warmup"):
+                props["singlethreadwarmup"] = "true"
 
-        block_cache = int(props.get("rocksdb.block_cache_size", "0"))
-        blob_cache = int(props.get("rocksdb.blob_cache_size", "0"))
-        range_cache = int(props.get("rocksdb.range_cache_size", "0"))
-        lsbm_cache = int(props.get("leveldb.cache_size", "0"))
-        configured_total = block_cache + blob_cache + range_cache + lsbm_cache
+            block_cache = int(props.get("rocksdb.block_cache_size", "0"))
+            blob_cache = int(props.get("rocksdb.blob_cache_size", "0"))
+            range_cache = int(props.get("rocksdb.range_cache_size", "0"))
+            lsbm_cache = int(props.get("leveldb.cache_size", "0"))
+            configured_total = block_cache + blob_cache + range_cache + lsbm_cache
 
-        log_name = f"{idx:03d}__{item['suite']}__{item['x_value']}__{variant.key}"
-        try:
-            rc, text, time_info = run_ycsb(
-                mode="run",
-                variant=variant,
-                workload=item["workload"],
-                db_path=db_path,
-                run_dir=out_dir,
-                log_name=log_name,
-                props=props,
-                threads=int(item.get("threads", 1)),
-                timeout=item["timeout"],
-            )
-        finally:
-            if work_db is not None and work_db.exists():
-                shutil.rmtree(work_db)
+            log_name = f"{idx:03d}__r{repeat_index:02d}__{item['suite']}__{item['x_value']}__{variant.key}"
+            random_seed = run_seed(item, repeat_index)
+            try:
+                rc, text, time_info = run_ycsb(
+                    mode="run",
+                    variant=variant,
+                    workload=item["workload"],
+                    db_path=db_path,
+                    run_dir=out_dir,
+                    log_name=log_name,
+                    props=props,
+                    threads=int(item.get("threads", 1)),
+                    timeout=item["timeout"],
+                    random_seed=random_seed,
+                )
+            finally:
+                if work_db is not None and work_db.exists():
+                    shutil.rmtree(work_db)
 
-        row: dict[str, str | int | float] = {
-            "run_index": idx,
-            "suite": item["suite"],
-            "x_value": item["x_value"],
-            "x_label": item["x_label"],
-            "dataset": dataset.name,
-            "recordcount": dataset.recordcount,
-            "fieldlength": dataset.fieldlength,
-            "variant": variant.label,
-            "variant_key": variant.key,
-            "engine": variant.engine,
-            "returncode": rc,
-            "read_only": int(item["read_only"]),
-            "scan_length": item["scan_length"],
-            "hot_ratio": item["hot_ratio"],
-            "read_prop": item["read_prop"],
-            "update_prop": item["update_prop"],
-            "scan_prop": item["scan_prop"],
-            "requestdistribution": item["requestdistribution"],
-            "operationcount": item["operationcount"],
-            "warmup_ops": item["warmup_ops"],
-            "warmup_ratio": item["warmup_ratio"],
-            "direct_reads": item["direct_reads"],
-            "threads": int(item.get("threads", 1)),
-            "single_thread_warmup": int(bool(item.get("single_thread_warmup", False))),
-            "cache_budget_bytes": run_budget,
-            "block_cache_bytes": block_cache,
-            "blob_cache_bytes": blob_cache,
-            "range_cache_bytes": range_cache,
-            "lsbm_cache_bytes": lsbm_cache,
-            "configured_total_cache_bytes": configured_total,
-            "log": str(out_dir / f"{log_name}.log"),
-        }
-        row.update(parse_log(text))
-        row.update(time_info)
-        if configured_total > 0 and "max_rss_kb" in row:
-            row["rss_to_cache_budget"] = (int(row["max_rss_kb"]) * 1024) / configured_total
-        rows.append(row)
+            row: dict[str, str | int | float] = {
+                "run_index": (idx - 1) * repeat_runs + repeat_index,
+                "repeat_index": repeat_index,
+                "repeat_count": repeat_runs,
+                "suite": item["suite"],
+                "x_value": item["x_value"],
+                "x_label": item["x_label"],
+                "dataset": dataset.name,
+                "recordcount": dataset.recordcount,
+                "fieldlength": dataset.fieldlength,
+                "variant": variant.label,
+                "variant_key": variant.key,
+                "engine": variant.engine,
+                "returncode": rc,
+                "read_only": int(item["read_only"]),
+                "scan_length": item["scan_length"],
+                "hot_ratio": item["hot_ratio"],
+                "read_prop": item["read_prop"],
+                "update_prop": item["update_prop"],
+                "scan_prop": item["scan_prop"],
+                "requestdistribution": item["requestdistribution"],
+                "operationcount": item["operationcount"],
+                "warmup_ops": item["warmup_ops"],
+                "warmup_ratio": item["warmup_ratio"],
+                "direct_reads": item["direct_reads"],
+                "threads": int(item.get("threads", 1)),
+                "single_thread_warmup": int(bool(item.get("single_thread_warmup", False))),
+                "random_seed": random_seed,
+                "cache_budget_bytes": run_budget,
+                "block_cache_bytes": block_cache,
+                "blob_cache_bytes": blob_cache,
+                "range_cache_bytes": range_cache,
+                "lsbm_cache_bytes": lsbm_cache,
+                "configured_total_cache_bytes": configured_total,
+                "log": str(out_dir / f"{log_name}.log"),
+            }
+            row.update(parse_log(text))
+            row.update(time_info)
+            if configured_total > 0 and "max_rss_kb" in row:
+                row["rss_to_cache_budget"] = (int(row["max_rss_kb"]) * 1024) / configured_total
+            rows.append(row)
 
-        if rc != 0:
-            write_summary(rows, out_dir / "summary_partial.csv")
-            raise RuntimeError(f"Run failed: {log_name}\n{text[-2500:]}")
+            if rc != 0:
+                write_summary(rows, out_dir / "summary_partial.csv")
+                raise RuntimeError(f"Run failed: {log_name}\n{text[-2500:]}")
 
     return rows
 
 
 SUMMARY_KEYS = [
     "run_index",
+    "repeat_index",
+    "repeat_count",
     "suite",
     "x_value",
     "x_label",
@@ -879,12 +936,14 @@ SUMMARY_KEYS = [
     "read_prop",
     "update_prop",
     "scan_prop",
+    "requestdistribution",
     "operationcount",
     "warmup_ops",
     "warmup_ratio",
     "direct_reads",
     "threads",
     "single_thread_warmup",
+    "random_seed",
     "cache_budget_bytes",
     "block_cache_bytes",
     "blob_cache_bytes",
@@ -916,6 +975,101 @@ SUMMARY_KEYS = [
     "rocksdb_blob_next",
     "log",
 ]
+
+
+AGGREGATE_SKIP_KEYS = {"run_index", "repeat_index", "log"}
+AGGREGATE_GROUP_KEYS = [
+    "suite",
+    "x_value",
+    "x_label",
+    "dataset",
+    "recordcount",
+    "fieldlength",
+    "variant",
+    "variant_key",
+    "engine",
+    "read_only",
+    "scan_length",
+    "hot_ratio",
+    "read_prop",
+    "update_prop",
+    "scan_prop",
+    "requestdistribution",
+    "operationcount",
+    "warmup_ops",
+    "warmup_ratio",
+    "direct_reads",
+    "threads",
+    "single_thread_warmup",
+    "cache_budget_bytes",
+    "block_cache_bytes",
+    "blob_cache_bytes",
+    "range_cache_bytes",
+    "lsbm_cache_bytes",
+    "configured_total_cache_bytes",
+]
+
+
+def aggregate_repeats(rows: list[dict]) -> list[dict]:
+    groups: dict[tuple, list[dict]] = {}
+    for row in rows:
+        if str(row.get("returncode", "0")) not in {"0", "0.0"}:
+            continue
+        key = tuple(str(row.get(k, "")) for k in AGGREGATE_GROUP_KEYS)
+        groups.setdefault(key, []).append(row)
+
+    aggregated: list[dict] = []
+    for _, group_rows in groups.items():
+        out: dict[str, str | float | int] = {}
+        first = group_rows[0]
+        for field in SUMMARY_KEYS:
+            if field in AGGREGATE_SKIP_KEYS:
+                continue
+            if field == "repeat_count":
+                out[field] = len(group_rows)
+                continue
+            if field == "random_seed":
+                out[field] = "varies" if len(group_rows) > 1 else first.get(field, "")
+                continue
+            values = [row.get(field, "") for row in group_rows if row.get(field, "") != ""]
+            numeric_values: list[float] = []
+            for value in values:
+                try:
+                    numeric_values.append(float(value))
+                except (TypeError, ValueError):
+                    numeric_values = []
+                    break
+            if values and numeric_values:
+                median = statistics.median(numeric_values)
+                out[field] = int(median) if all(float(v).is_integer() for v in numeric_values) else median
+            else:
+                out[field] = first.get(field, "")
+        out["run_index"] = len(aggregated) + 1
+        out["repeat_index"] = ""
+        out["log"] = ";".join(str(row.get("log", "")) for row in group_rows)
+        aggregated.append(out)
+
+    def sort_key(row: dict) -> tuple:
+        suite_order = {
+            "scan_length": 0,
+            "value_size": 1,
+            "large_value_scan_length": 2,
+            "kvsep_4gb_scan_length": 3,
+            "cache_budget": 4,
+            "workload": 5,
+            "warmup": 6,
+            "threads": 7,
+        }
+        return (
+            suite_order.get(str(row.get("suite")), 99),
+            float(row.get("x_value", 0)) if str(row.get("x_value", "")).replace(".", "", 1).isdigit() else str(row.get("x_value")),
+            VARIANT_ORDER.index(str(row.get("variant"))) if str(row.get("variant")) in VARIANT_ORDER else 99,
+        )
+
+    aggregated.sort(key=sort_key)
+    for idx, row in enumerate(aggregated, start=1):
+        row["run_index"] = idx
+    return aggregated
 
 
 def write_summary(rows: list[dict], path: Path) -> None:
@@ -1388,52 +1542,62 @@ def make_line_metric_figure(
     plt.close(fig)
 
 
+def make_kvsep_p99_figure(rows: list[dict], out_path: Path) -> None:
+    setup_style()
+    fig, ax = plt.subplots(figsize=(3.75, 2.45), constrained_layout=True)
+    plot_metric_lines(
+        ax,
+        rows,
+        metric="scan_p99_us",
+        ylabel="p99 scan latency (us)",
+        suite="kvsep_4gb_scan_length",
+        title="4GB 8KB value-separated stress",
+    )
+    ax.set_xlabel("scan length")
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=3,
+        bbox_to_anchor=(0.5, 1.22),
+        frameon=False,
+        columnspacing=0.8,
+        handlelength=1.7,
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
 def make_thread_pair_line_figure(rows: list[dict], out_path: Path) -> None:
     setup_style()
     suite = "threads"
     suite_rows = [r for r in rows if r["suite"] == suite]
     if not suite_rows:
         return
-    x_pairs = sorted_x_pairs(suite_rows)
-    panels = [
-        ("RocksDB family", ["RocksDB", "RocksDB+LORC"]),
-        ("BlobDB family", ["BlobDB", "BlobDB+LORC"]),
-    ]
-    fig, axes = plt.subplots(2, 1, figsize=(3.45, 3.35), constrained_layout=True, sharex=True)
-    for ax, (title, variants) in zip(axes, panels):
-        for variant in variants:
-            xs: list[float] = []
-            values: list[float] = []
-            for position, (_, x_value, _) in enumerate(x_pairs):
-                row = next(
-                    (r for r in suite_rows if r["variant"] == variant and r["x_value"] == x_value),
-                    None,
-                )
-                value = as_float(row, "throughputops/sec") / 1000.0
-                if not math.isfinite(value):
-                    continue
-                xs.append(float(position))
-                values.append(value)
-            ax.plot(
-                xs,
-                values,
-                color=COLORS[variant],
-                linestyle=LINE_STYLES[variant],
-                marker=LINE_MARKERS[variant],
-                linewidth=1.55,
-                markersize=4.1,
-                markeredgecolor="white",
-                markeredgewidth=0.35,
-                label=variant,
-            )
-        ax.set_title(title)
-        ax.set_xlabel("threads")
-        ax.set_xticks(list(range(len(x_pairs))))
-        ax.set_xticklabels([label for _, _, label in x_pairs])
-        ax.grid(axis="both", color="#e1e1e1", linewidth=0.55)
-        ax.set_axisbelow(True)
-        ax.legend(frameon=False, loc="upper left")
-    axes[0].set_ylabel("Kops/s")
+    fig, ax = plt.subplots(figsize=(3.75, 2.45), constrained_layout=True)
+    plot_metric_lines(
+        ax,
+        rows,
+        metric="throughputops/sec",
+        transform=lambda v: v / 1000.0,
+        ylabel="Kops/s",
+        suite=suite,
+        title="read-only scan scaling",
+    )
+    ax.set_xlabel("threads")
+    handles, labels = ax.get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=3,
+        bbox_to_anchor=(0.5, 1.22),
+        frameon=False,
+        columnspacing=0.8,
+        handlelength=1.7,
+    )
     out_path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(out_path, bbox_inches="tight")
     plt.close(fig)
@@ -1480,7 +1644,7 @@ def make_figures(summary: Path, figure_dir: Path) -> None:
     rows = load_rows(summary)
     suites = {str(row.get("suite")) for row in rows}
     if "scan_length" in suites:
-        make_metric_row(
+        make_metric_line_row(
             rows,
             suite="scan_length",
             out_path=figure_dir / "eval_fair_scan_length.pdf",
@@ -1494,11 +1658,16 @@ def make_figures(summary: Path, figure_dir: Path) -> None:
             title_prefix="value size",
         )
     if "large_value_scan_length" in suites:
-        make_metric_row(
+        make_metric_line_row(
             rows,
             suite="large_value_scan_length",
             out_path=figure_dir / "eval_large_value_scan_length.pdf",
             title_prefix="8KB scan length",
+        )
+    if "kvsep_4gb_scan_length" in suites:
+        make_kvsep_p99_figure(
+            rows,
+            out_path=figure_dir / "eval_kvsep_4gb_scan_length.pdf",
         )
     if "workload" in suites:
         make_workload_figure(rows, figure_dir / "eval_fair_workload.pdf")
@@ -1549,14 +1718,14 @@ def write_anomaly_report(rows: list[dict], path: Path) -> None:
         by_suite_variant.setdefault((str(row.get("suite")), str(row.get("variant"))), []).append(row)
 
     for (suite, variant), series in by_suite_variant.items():
-        if suite not in {"scan_length", "cache_budget", "threads", "warmup"}:
+        if suite not in {"scan_length", "large_value_scan_length", "kvsep_4gb_scan_length", "cache_budget", "threads", "warmup"}:
             continue
         ordered = sorted(series, key=lambda r: float(r.get("x_value", 0)))
         values = [row_value(r, "throughputops/sec") for r in ordered]
         xs = [r.get("x_label", r.get("x_value")) for r in ordered]
         if any(math.isnan(v) for v in values) or len(values) < 3:
             continue
-        if suite == "scan_length":
+        if suite in {"scan_length", "large_value_scan_length", "kvsep_4gb_scan_length"}:
             for a, b, xa, xb in zip(values, values[1:], xs, xs[1:]):
                 if b > a * 1.15:
                     warnings.append(
@@ -1660,6 +1829,12 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--dry-run", action="store_true")
     parser.add_argument("--max-runs", type=int, default=None)
     parser.add_argument(
+        "--repeat-runs",
+        type=int,
+        default=1,
+        help="repeat every planned run and aggregate successful repeats with medians",
+    )
+    parser.add_argument(
         "--suites",
         type=str,
         default="",
@@ -1722,7 +1897,16 @@ def main() -> int:
     if args.prepare_only:
         return 0
 
-    rows = execute_plan(plan, out_dir=out_dir, budget=budget, max_runs=args.max_runs)
+    rows = execute_plan(
+        plan,
+        out_dir=out_dir,
+        budget=budget,
+        max_runs=args.max_runs,
+        repeat_runs=max(1, args.repeat_runs),
+    )
+    if args.repeat_runs > 1:
+        write_summary(rows, out_dir / "summary_raw.csv")
+        rows = aggregate_repeats(rows)
     summary = out_dir / "summary.csv"
     write_summary(rows, summary)
     write_anomaly_report(rows, out_dir / "anomaly_report.md")

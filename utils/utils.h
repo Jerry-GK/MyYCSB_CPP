@@ -11,6 +11,7 @@
 #define YCSB_C_UTILS_H_
 
 #include <algorithm>
+#include <atomic>
 #include <cstdlib>
 #include <cstdint>
 #include <exception>
@@ -55,13 +56,17 @@ inline uint32_t InitialRandomSeed() {
   const char *seed_env = std::getenv("YCSB_RANDOM_SEED");
   uint32_t seed = 0;
   if (seed_env != nullptr && seed_env[0] != '\0') {
+    static std::atomic<uint32_t> next_thread_ordinal{0};
+    const uint32_t ordinal =
+        next_thread_ordinal.fetch_add(1, std::memory_order_relaxed);
     seed = static_cast<uint32_t>(std::stoul(seed_env));
+    seed += 0x9e3779b9u * ordinal;
   } else {
     std::random_device rd;
     seed = rd();
+    seed ^= static_cast<uint32_t>(
+        std::hash<std::thread::id>{}(std::this_thread::get_id()));
   }
-  seed ^= static_cast<uint32_t>(
-      std::hash<std::thread::id>{}(std::this_thread::get_id()));
   return seed == 0 ? 1 : seed;
 }
 
