@@ -74,6 +74,9 @@ namespace {
   const std::string PROP_RANGE_CACHE_PHYSICAL_TYPE = "rocksdb.range_cache_physical_type";
   const std::string PROP_RANGE_CACHE_PHYSICAL_TYPE_DEFAULT = "vec";
 
+  const std::string PROP_RANGE_CACHE_VICTIM_POLICY = "rocksdb.range_cache_victim_policy";
+  const std::string PROP_RANGE_CACHE_VICTIM_POLICY_DEFAULT = "boundary_lru";
+
   const std::string PROP_LORC_ENABLE_STATS = "rocksdb.lorc_enable_stats";
   const std::string PROP_LORC_ENABLE_STATS_DEFAULT = "false";
 
@@ -452,7 +455,22 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
       } else if (physical_type != "vec") {
         throw utils::Exception("Unknown rocksdb.range_cache_physical_type: " + physical_type);
       }
-      range_cache = rocksdb::NewRBTreeLogicalOrderedRangeCache(range_cache_size, rocksdb::LorcLogger::Level::WARN, range_type);
+      const std::string victim_policy_name =
+          props.GetProperty(PROP_RANGE_CACHE_VICTIM_POLICY,
+                            PROP_RANGE_CACHE_VICTIM_POLICY_DEFAULT);
+      rocksdb::RangeCacheVictimPolicy victim_policy =
+          rocksdb::RangeCacheVictimPolicy::BOUNDARY_LRU;
+      if (victim_policy_name == "physical_lru") {
+        victim_policy = rocksdb::RangeCacheVictimPolicy::PHYSICAL_LRU;
+      } else if (victim_policy_name == "shortest_range") {
+        victim_policy = rocksdb::RangeCacheVictimPolicy::SHORTEST_RANGE;
+      } else if (victim_policy_name != "boundary_lru") {
+        throw utils::Exception("Unknown rocksdb.range_cache_victim_policy: " +
+                               victim_policy_name);
+      }
+      range_cache = rocksdb::NewRBTreeLogicalOrderedRangeCache(
+          range_cache_size, rocksdb::LorcLogger::Level::WARN, range_type,
+          victim_policy);
       if (props.GetProperty(PROP_LORC_ENABLE_STATS,
                             PROP_LORC_ENABLE_STATS_DEFAULT) == "true") {
         range_cache->setEnableStatistic(true);
