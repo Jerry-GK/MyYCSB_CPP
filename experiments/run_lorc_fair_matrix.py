@@ -79,8 +79,8 @@ GENERAL_DATASET = Dataset(
     name="4GB-1KB",
     recordcount=GENERAL_RECORDCOUNT,
     fieldlength=GENERAL_FIELD_LENGTH,
-    source_root=ROOT / "db" / "ycsb-source-24B-1KB-4GB",
-    source_tag="source-24B-1KB-4GB",
+    source_root=ROOT / "db" / "ycsb-source-24B-1KB-4GB-fair-nocomp",
+    source_tag="source-24B-1KB-4GB-fair-nocomp",
 )
 
 VARIANTS = [
@@ -134,6 +134,7 @@ def system_props(variant: Variant, budget: int, *, direct_reads: str) -> dict[st
         return {
             "leveldb.cache_size": str(budget),
             "leveldb.destroy": "false",
+            "leveldb.compression": "no",
             "leveldb.run_compaction": "true",
             "leveldb.compaction_buffer_trim_interval": "30",
         }
@@ -157,6 +158,7 @@ def system_props(variant: Variant, budget: int, *, direct_reads: str) -> dict[st
         "rocksdb.block_cache_size": str(block_cache),
         "rocksdb.blob_cache_size": str(blob_cache),
         "rocksdb.range_cache_size": str(range_cache),
+        "rocksdb.compression": "no",
         "rocksdb.use_direct_reads": direct_reads,
         "rocksdb.enable_statistics": "true",
         "rocksdb.range_cache_physical_type": "continuous",
@@ -186,6 +188,7 @@ def load_props(variant: Variant, budget: int) -> dict[str, str]:
         return {
             "leveldb.cache_size": str(min(budget, 256 * MB)),
             "leveldb.destroy": "true",
+            "leveldb.compression": "no",
             "leveldb.run_compaction": "true",
             "leveldb.compaction_buffer_trim_interval": "30",
         }
@@ -194,6 +197,7 @@ def load_props(variant: Variant, budget: int) -> dict[str, str]:
         {
             "rocksdb.create_if_missing": "true",
             "rocksdb.destroy": "true",
+            "rocksdb.compression": "no",
             "rocksdb.disable_auto_compactions": "false",
             "rocksdb.read_only": "false",
             "rocksdb.range_cache_size": "0",
@@ -460,7 +464,7 @@ def run_ycsb(
 
 
 def value_dataset(value_size: int) -> Dataset:
-    tag = f"source-24B-{value_size}B-1GB"
+    tag = f"source-24B-{value_size}B-1GB-fair-nocomp"
     recordcount = max(32_768, VALUE_SWEEP_BYTES // value_size)
     return Dataset(
         name=f"1GB-{value_size}B",
@@ -1044,6 +1048,7 @@ def write_manifest(out_dir: Path, plan: list[dict], budget: int) -> None:
         "BlobDB:        block=budget/4, blob=3*budget/4",
         "BlobDB+LORC:   range=budget, block=0, blob=0",
         "LSbM:          block=budget",
+        "Compression:   disabled for RocksDB, BlobDB, and LSbM",
         "",
         "Plan:",
     ]
@@ -1064,6 +1069,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--measured-ops", type=int, default=50_000)
     parser.add_argument("--direct-reads", choices=["true", "false"], default="false")
     parser.add_argument("--reload-value-sources", action="store_true")
+    parser.add_argument(
+        "--reload-general-source",
+        action="store_true",
+        help="rebuild the 4GB source databases with the current controlled options",
+    )
+    parser.add_argument(
+        "--reload-sources",
+        action="store_true",
+        help="rebuild both the 4GB source databases and value-size sweep sources",
+    )
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--plot-only", action="store_true")
     parser.add_argument("--dry-run", action="store_true")
@@ -1097,8 +1112,28 @@ def main() -> int:
         return 0
 
     active_plan = plan[: args.max_runs] if args.max_runs is not None else plan
+    needs_general_source = (
+        args.prepare_only
+        or args.reload_sources
+        or args.reload_general_source
+        or any(item["dataset"].name == GENERAL_DATASET.name for item in active_plan)
+    )
+    general_missing = [
+        GENERAL_DATASET
+        for engine in ("rocksdb", "blobdb", "lsbm")
+        if not GENERAL_DATASET.source_path(engine).exists()
+    ]
+    if needs_general_source and (general_missing or args.reload_sources or args.reload_general_source):
+        prepare_sources(
+            [GENERAL_DATASET],
+            budget=budget,
+            out_dir=out_dir,
+            reload=args.reload_sources or args.reload_general_source,
+        )
+
     needs_value_sources = (
         args.prepare_only
+        or args.reload_sources
         or args.reload_value_sources
         or any(item["suite"] == "value_size" for item in active_plan)
     )
@@ -1111,14 +1146,19 @@ def main() -> int:
             for engine in ("rocksdb", "blobdb", "lsbm")
             if not dataset.source_path(engine).exists()
         ]
-    if needs_value_sources and (missing or args.reload_value_sources):
+    if needs_value_sources and (missing or args.reload_sources or args.reload_value_sources):
         unique = []
         seen = set()
         for dataset in value_datasets:
             if dataset.name not in seen:
                 seen.add(dataset.name)
                 unique.append(dataset)
-        prepare_sources(unique, budget=budget, out_dir=out_dir, reload=args.reload_value_sources)
+        prepare_sources(
+            unique,
+            budget=budget,
+            out_dir=out_dir,
+            reload=args.reload_sources or args.reload_value_sources,
+        )
 
     if args.prepare_only:
         return 0
