@@ -246,6 +246,8 @@ def run_one(
         "rocksdb.use_direct_reads": direct_reads,
         "status.interval": "30",
     }
+    if variant.lorc:
+        props["rocksdb.lorc_enable_stats"] = "true"
     if read_only:
         props.update(
             {
@@ -406,12 +408,12 @@ def build_matrix(workload_dir: Path) -> list[dict]:
         add(
             f"cache_size_{mb}mb",
             lorc_variants,
-            90_000,
-            hot_ratio=0.20,
+            15_000,
+            hot_ratio=0.10,
             scan_length=50,
             extra_props={"rocksdb.range_cache_size": str(mb * 1024 * 1024)},
-            min_warmup_ops=120_000,
-            coverage_factor=4.0,
+            min_warmup_ops=30_000,
+            coverage_factor=1.0,
         )
 
     for scan_prop in [1.0, 0.5, 0.1]:
