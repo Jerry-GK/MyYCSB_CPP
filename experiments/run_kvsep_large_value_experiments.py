@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Focused large-value/KV-separation experiments for the LORC paper.
+"""KV-separation stress experiments for the LORC paper.
 
-This suite is intentionally small. It creates a separate large-value source
-database, leaves existing standard sources untouched, and then runs a direct-I/O
-stress point that exposes BlobDB's scattered value dereferences.
+The suite uses a separate 8KB-value source database. It is designed to expose
+the path that is specific to KV-separated LSMs: sorted key-pointer iteration
+followed by large-value dereferences from blob files. Read-only runs reuse the
+source DB and disable automatic compaction; update runs should be added as a
+separate copied-DB experiment.
 """
 
 from __future__ import annotations
@@ -31,11 +33,6 @@ RECORDCOUNT = 524_288
 FIELD_LENGTH = 8192
 SOURCE_POSTFIX = "source-24B-8KB-4GB"
 YCSB_DB = "rocksdb_lorc"
-
-SCAN_LENGTH = 50
-HOT_RATIO = 0.02
-WARMUP_OPS = 3_100
-MEASURED_OPS = 100
 RANDOM_SEED = 20260514
 
 
@@ -45,6 +42,7 @@ class Variant:
     db: str
     prop_file: str
     lorc: bool
+    group: str
     props: dict[str, str] = field(default_factory=dict)
 
     @property
@@ -68,38 +66,151 @@ class Variant:
         )
 
 
+MB = 1024**2
+GB = 1024**3
+
 RUN_VARIANTS = [
     Variant(
         "RocksDB",
         "rocksdb",
         "rocksdb.properties",
         False,
-        {"rocksdb.block_cache_size": str(512 * 1024**2)},
+        "inline",
+        {"rocksdb.block_cache_size": str(512 * MB)},
+    ),
+    Variant(
+        "BlobDB no blob cache",
+        "blobdb",
+        "blobdb.properties",
+        False,
+        "blobdb",
+        {"rocksdb.block_cache_size": str(512 * MB), "rocksdb.blob_cache_size": "0"},
+    ),
+    Variant(
+        "BlobDB 64MB blob",
+        "blobdb",
+        "blobdb.properties",
+        False,
+        "blobdb",
+        {"rocksdb.block_cache_size": str(512 * MB), "rocksdb.blob_cache_size": str(64 * MB)},
     ),
     Variant(
         "BlobDB 512MB blob",
         "blobdb",
         "blobdb.properties",
         False,
-        {
-            "rocksdb.block_cache_size": str(512 * 1024**2),
-            "rocksdb.blob_cache_size": str(512 * 1024**2),
-        },
+        "blobdb",
+        {"rocksdb.block_cache_size": str(512 * MB), "rocksdb.blob_cache_size": str(512 * MB)},
     ),
     Variant(
-        "BlobDB+LORC",
+        "BlobDB+LORC no blob cache",
         "blobdb",
         "blobdb_lorc.properties",
         True,
+        "lorc",
         {
-            "rocksdb.block_cache_size": str(512 * 1024**2),
-            "rocksdb.blob_cache_size": str(512 * 1024**2),
-            "rocksdb.range_cache_size": str(2 * 1024**3),
+            "rocksdb.block_cache_size": str(512 * MB),
+            "rocksdb.blob_cache_size": "0",
+            "rocksdb.range_cache_size": str(1536 * MB),
+            "rocksdb.range_cache_physical_type": "continuous",
+            "rocksdb.lorc_enable_stats": "true",
+        },
+    ),
+    Variant(
+        "BlobDB+LORC 64MB blob",
+        "blobdb",
+        "blobdb_lorc.properties",
+        True,
+        "lorc",
+        {
+            "rocksdb.block_cache_size": str(512 * MB),
+            "rocksdb.blob_cache_size": str(64 * MB),
+            "rocksdb.range_cache_size": str(1536 * MB),
             "rocksdb.range_cache_physical_type": "continuous",
             "rocksdb.lorc_enable_stats": "true",
         },
     ),
 ]
+
+
+@dataclass(frozen=True)
+class Experiment:
+    name: str
+    variants: tuple[str, ...]
+    scan_length: int = 50
+    hot_ratio: float = 0.05
+    measured_ops: int = 3000
+    min_warmup_ops: int = 6000
+    coverage_factor: float = 6.0
+    direct_reads: bool = False
+    distribution: str = "zipfian"
+
+
+VARIANT_BY_LABEL = {v.label: v for v in RUN_VARIANTS}
+
+
+def experiment_matrix(profile: str, include_direct_probe: bool) -> list[Experiment]:
+    core = (
+        "RocksDB",
+        "BlobDB no blob cache",
+        "BlobDB 64MB blob",
+        "BlobDB 512MB blob",
+        "BlobDB+LORC no blob cache",
+        "BlobDB+LORC 64MB blob",
+    )
+    if profile == "quick":
+        experiments = [
+            Experiment("kvsep_cache_path", core, measured_ops=400, min_warmup_ops=2000),
+            Experiment(
+                "kvsep_scan_length_50",
+                ("BlobDB no blob cache", "BlobDB 64MB blob", "BlobDB+LORC no blob cache", "BlobDB+LORC 64MB blob"),
+                measured_ops=400,
+                min_warmup_ops=2000,
+            ),
+        ]
+        if include_direct_probe:
+            experiments.append(
+                Experiment(
+                    "kvsep_direct_probe",
+                    ("RocksDB", "BlobDB no blob cache", "BlobDB+LORC no blob cache"),
+                    scan_length=5,
+                    hot_ratio=0.001,
+                    measured_ops=20,
+                    min_warmup_ops=40,
+                    coverage_factor=1.0,
+                    direct_reads=True,
+                )
+            )
+        return experiments
+    scan_variants = (
+        "BlobDB no blob cache",
+        "BlobDB 64MB blob",
+        "BlobDB+LORC no blob cache",
+        "BlobDB+LORC 64MB blob",
+    )
+    experiments = [
+        Experiment("kvsep_cache_path", core),
+        Experiment("kvsep_scan_length_10", scan_variants, scan_length=10, measured_ops=4000, min_warmup_ops=9000),
+        Experiment("kvsep_scan_length_50", scan_variants, scan_length=50),
+        Experiment("kvsep_scan_length_100", scan_variants, scan_length=100, measured_ops=2000),
+        Experiment("kvsep_hot_ratio_1", scan_variants, hot_ratio=0.01, measured_ops=3000, min_warmup_ops=3000),
+        Experiment("kvsep_hot_ratio_5", scan_variants, hot_ratio=0.05),
+        Experiment("kvsep_hot_ratio_20", scan_variants, hot_ratio=0.20, measured_ops=1500, min_warmup_ops=10000),
+    ]
+    if include_direct_probe:
+        experiments.append(
+            Experiment(
+                "kvsep_direct_probe",
+                ("RocksDB", "BlobDB no blob cache", "BlobDB+LORC no blob cache"),
+                scan_length=5,
+                hot_ratio=0.001,
+                measured_ops=20,
+                min_warmup_ops=40,
+                coverage_factor=1.0,
+                direct_reads=True,
+            )
+        )
+    return experiments
 
 
 METRIC_RE = re.compile(
@@ -109,17 +220,25 @@ METRIC_RE = re.compile(
 )
 SIMPLE_RE = re.compile(r"Run (?P<name>[^:]+): (?P<value>[-\d.]+)")
 LORC_STATS_RE = re.compile(r"\[LORC_STATS\](?P<body>.*)")
+ROCKSDB_STATS_RE = re.compile(r"\[ROCKSDB_STATS\](?P<body>.*)")
 
 
 def shell_quote(parts: Iterable[str]) -> str:
     return " ".join(subprocess.list2cmdline([p]) for p in parts)
 
 
-def workload_text(*, operationcount: int, warmup_ratio: float) -> str:
+def workload_text(
+    *,
+    operationcount: int,
+    warmup_ratio: float,
+    hot_ratio: float,
+    scan_length: int,
+    distribution: str,
+) -> str:
     return f"""# Generated by experiments/run_kvsep_large_value_experiments.py
 recordcount={RECORDCOUNT}
 operationcount={operationcount}
-hot_data_ratio={HOT_RATIO}
+hot_data_ratio={hot_ratio}
 warmup_ratio={warmup_ratio:.8f}
 insertorder=random
 
@@ -137,24 +256,47 @@ updateproportion=0
 scanproportion=1
 insertproportion=0
 
-requestdistribution=zipfian
+requestdistribution={distribution}
 
-minscanlength={SCAN_LENGTH}
-maxscanlength={SCAN_LENGTH}
+minscanlength={scan_length}
+maxscanlength={scan_length}
 scanlengthdistribution=uniform
 """
 
 
-def write_workloads(workload_dir: Path) -> tuple[Path, Path, int, float]:
-    workload_dir.mkdir(parents=True, exist_ok=True)
-    load_path = workload_dir / "kvsep_load.properties"
-    run_path = workload_dir / "kvsep_directio_scan.properties"
+def warmup_ops(exp: Experiment) -> int:
+    hot_records = RECORDCOUNT * exp.hot_ratio
+    coverage_ops = math.ceil(exp.coverage_factor * hot_records / max(exp.scan_length, 1))
+    return max(exp.min_warmup_ops, coverage_ops)
 
-    load_path.write_text(workload_text(operationcount=1, warmup_ratio=0.0))
-    total_ops = WARMUP_OPS + MEASURED_OPS
-    warmup_ratio = WARMUP_OPS / total_ops
-    run_path.write_text(workload_text(operationcount=total_ops, warmup_ratio=warmup_ratio))
-    return load_path, run_path, total_ops, warmup_ratio
+
+def write_workload(workload_dir: Path, exp: Experiment) -> tuple[Path, int, int, float]:
+    workload_dir.mkdir(parents=True, exist_ok=True)
+    warmup = warmup_ops(exp)
+    total_ops = warmup + exp.measured_ops
+    warmup_ratio = warmup / total_ops
+    path = workload_dir / f"{exp.name}.properties"
+    path.write_text(
+        workload_text(
+            operationcount=total_ops,
+            warmup_ratio=warmup_ratio,
+            hot_ratio=exp.hot_ratio,
+            scan_length=exp.scan_length,
+            distribution=exp.distribution,
+        )
+    )
+    return path, total_ops, warmup, warmup_ratio
+
+
+def parse_kv_body(out: dict[str, float | int], prefix: str, body: str) -> None:
+    for token in body.strip().split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        try:
+            out[f"{prefix}_{key}"] = float(value)
+        except ValueError:
+            pass
 
 
 def parse_log(text: str) -> dict[str, float | int]:
@@ -169,14 +311,9 @@ def parse_log(text: str) -> dict[str, float | int]:
         name = match.group("name").strip().lower().replace(" ", "_").replace("(", "").replace(")", "")
         out[name] = float(match.group("value"))
     for match in LORC_STATS_RE.finditer(text):
-        for token in match.group("body").strip().split():
-            if "=" not in token:
-                continue
-            key, value = token.split("=", 1)
-            try:
-                out[f"lorc_{key}"] = float(value)
-            except ValueError:
-                pass
+        parse_kv_body(out, "lorc", match.group("body"))
+    for match in ROCKSDB_STATS_RE.finditer(text):
+        parse_kv_body(out, "rocksdb", match.group("body"))
     if "measured_throughputops/sec" in out:
         out["throughputops/sec"] = out["measured_throughputops/sec"]
     return out
@@ -211,8 +348,8 @@ def load_source(load_workload: Path, run_dir: Path, reload: bool) -> None:
     source_root = ROOT / "db" / f"ycsb-{SOURCE_POSTFIX}"
     source_root.mkdir(parents=True, exist_ok=True)
     load_variants = [
-        Variant("RocksDB load", "rocksdb", "rocksdb.properties", False),
-        Variant("BlobDB load", "blobdb", "blobdb.properties", False),
+        Variant("RocksDB load", "rocksdb", "rocksdb.properties", False, "load"),
+        Variant("BlobDB load", "blobdb", "blobdb.properties", False, "load"),
     ]
     for variant in load_variants:
         db_path = variant.source_path
@@ -249,7 +386,14 @@ def load_source(load_workload: Path, run_dir: Path, reload: bool) -> None:
             raise RuntimeError(f"load failed for {variant.db}, see log")
 
 
-def run_variant(variant: Variant, workload: Path, run_dir: Path) -> dict[str, str | float | int]:
+def run_variant(
+    variant: Variant,
+    exp: Experiment,
+    workload: Path,
+    run_dir: Path,
+    total_ops: int,
+    warmup: int,
+) -> dict[str, str | float | int]:
     db_path = variant.source_path
     if not db_path.exists():
         raise FileNotFoundError(db_path)
@@ -259,8 +403,9 @@ def run_variant(variant: Variant, workload: Path, run_dir: Path) -> dict[str, st
         "rocksdb.destroy": "false",
         "rocksdb.create_if_missing": "false",
         "rocksdb.disable_auto_compactions": "true",
-        "rocksdb.use_direct_reads": "true",
-        "status.interval": "30",
+        "rocksdb.use_direct_reads": "true" if exp.direct_reads else "false",
+        "rocksdb.enable_statistics": "true",
+        "status.interval": "60",
     }
     props.update(variant.props)
     cmd = [
@@ -277,22 +422,24 @@ def run_variant(variant: Variant, workload: Path, run_dir: Path) -> dict[str, st
         cmd.extend(["-p", f"{key}={value}"])
     cmd.extend(["-threads", "1", "-s"])
 
-    log_path = run_dir / f"kvsep_directio__{variant.key}.log"
-    rc = run_cmd(cmd, ROOT, log_path, timeout=3600)
+    log_path = run_dir / f"{exp.name}__{variant.key}.log"
+    rc = run_cmd(cmd, ROOT, log_path, timeout=5400)
     row: dict[str, str | float | int] = {
-        "experiment": "kvsep_large_value_directio",
+        "experiment": exp.name,
         "variant": variant.label,
         "variant_key": variant.key,
+        "variant_group": variant.group,
         "db": variant.db,
         "lorc": int(variant.lorc),
         "returncode": rc,
         "recordcount": RECORDCOUNT,
         "fieldlength": FIELD_LENGTH,
-        "scan_length": SCAN_LENGTH,
-        "hot_ratio": HOT_RATIO,
-        "warmup_ops": WARMUP_OPS,
-        "measured_ops": MEASURED_OPS,
-        "use_direct_reads": "true",
+        "scan_length": exp.scan_length,
+        "hot_ratio": exp.hot_ratio,
+        "warmup_ops": warmup,
+        "measured_ops": exp.measured_ops,
+        "total_ops": total_ops,
+        "use_direct_reads": "true" if exp.direct_reads else "false",
         "random_seed": RANDOM_SEED,
         "log": str(log_path),
     }
@@ -301,34 +448,53 @@ def run_variant(variant: Variant, workload: Path, run_dir: Path) -> dict[str, st
     return row
 
 
+SUMMARY_KEYS = [
+    "experiment",
+    "variant",
+    "variant_key",
+    "variant_group",
+    "db",
+    "lorc",
+    "returncode",
+    "throughputops/sec",
+    "scan_count",
+    "scan_avg_us",
+    "scan_p99_us",
+    "scan_p999_us",
+    "lorc_full_hit_rate",
+    "lorc_hit_size_rate",
+    "lorc_current_size",
+    "lorc_total_range_length",
+    "lorc_materialized_entries",
+    "lorc_materialized_key_bytes",
+    "lorc_materialized_value_bytes",
+    "rocksdb_block_data_hit",
+    "rocksdb_block_data_miss",
+    "rocksdb_block_bytes_read",
+    "rocksdb_iter_bytes_read",
+    "rocksdb_db_seek",
+    "rocksdb_db_next",
+    "rocksdb_blob_cache_hit",
+    "rocksdb_blob_cache_miss",
+    "rocksdb_blob_cache_bytes_read",
+    "rocksdb_blob_file_bytes_read",
+    "rocksdb_blob_next",
+    "recordcount",
+    "fieldlength",
+    "scan_length",
+    "hot_ratio",
+    "warmup_ops",
+    "measured_ops",
+    "total_ops",
+    "use_direct_reads",
+    "random_seed",
+    "log",
+]
+
+
 def write_summary(rows: list[dict[str, str | float | int]], path: Path) -> None:
-    keys = [
-        "experiment",
-        "variant",
-        "db",
-        "lorc",
-        "returncode",
-        "throughputops/sec",
-        "scan_count",
-        "scan_avg_us",
-        "scan_p99_us",
-        "scan_p999_us",
-        "lorc_full_hit_rate",
-        "lorc_hit_size_rate",
-        "lorc_current_size",
-        "lorc_total_range_length",
-        "recordcount",
-        "fieldlength",
-        "scan_length",
-        "hot_ratio",
-        "warmup_ops",
-        "measured_ops",
-        "use_direct_reads",
-        "random_seed",
-        "log",
-    ]
     with path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
+        writer = csv.DictWriter(f, fieldnames=SUMMARY_KEYS, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
 
@@ -340,28 +506,41 @@ def load_rows(path: Path) -> list[dict[str, str]]:
 
 def f(row: dict[str, str], key: str) -> float:
     try:
-        return float(row.get(key, "nan"))
+        value = row.get(key, "")
+        return float(value) if value != "" else math.nan
     except ValueError:
         return math.nan
 
 
 COLORS = {
     "RocksDB": "#4E79A7",
-    "BlobDB 512MB blob": "#59A14F",
-    "BlobDB+LORC": "#E15759",
+    "BlobDB no blob cache": "#7F7F7F",
+    "BlobDB 64MB blob": "#59A14F",
+    "BlobDB 512MB blob": "#8CD17D",
+    "BlobDB+LORC no blob cache": "#E15759",
+    "BlobDB+LORC 64MB blob": "#FF9D9A",
+}
+
+SHORT_LABEL = {
+    "RocksDB": "RocksDB",
+    "BlobDB no blob cache": "BlobDB\n0MB blob",
+    "BlobDB 64MB blob": "BlobDB\n64MB blob",
+    "BlobDB 512MB blob": "BlobDB\n512MB blob",
+    "BlobDB+LORC no blob cache": "BlobDB+LORC\n0MB blob",
+    "BlobDB+LORC 64MB blob": "BlobDB+LORC\n64MB blob",
 }
 
 
 def style() -> None:
     plt.rcParams.update(
         {
-            "font.size": 9,
-            "axes.titlesize": 10,
-            "axes.labelsize": 9,
-            "legend.fontsize": 8,
-            "xtick.labelsize": 8,
-            "ytick.labelsize": 8,
-            "figure.dpi": 160,
+            "font.size": 8.5,
+            "axes.titlesize": 9,
+            "axes.labelsize": 8.5,
+            "legend.fontsize": 7.5,
+            "xtick.labelsize": 7.5,
+            "ytick.labelsize": 7.5,
+            "figure.dpi": 180,
             "savefig.bbox": "tight",
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
@@ -371,16 +550,164 @@ def style() -> None:
     )
 
 
-def bar(labels: list[str], values: list[float], ylabel: str, out: Path, *, log: bool = False) -> None:
-    fig, ax = plt.subplots(figsize=(3.45, 2.35))
-    ax.bar(labels, values, color=[COLORS[l] for l in labels], edgecolor="#303030", linewidth=0.45)
+def fmt_thousands(x: float, _: int) -> str:
+    if x >= 1000:
+        return f"{x/1000:.0f}K"
+    return f"{x:.0f}"
+
+
+def rows_for(rows: list[dict[str, str]], experiment: str) -> list[dict[str, str]]:
+    return [r for r in rows if r["experiment"] == experiment and r.get("returncode", "1") == "0"]
+
+
+def grouped_bar(
+    rows: list[dict[str, str]],
+    metric: str,
+    ylabel: str,
+    out: Path,
+    *,
+    logy: bool = False,
+    annotate: bool = False,
+) -> None:
+    fig, ax = plt.subplots(figsize=(6.9, 2.35))
+    labels = [r["variant"] for r in rows]
+    values = [f(r, metric) for r in rows]
+    bars = ax.bar(
+        range(len(rows)),
+        values,
+        color=[COLORS.get(label, "#999999") for label in labels],
+        edgecolor="#303030",
+        linewidth=0.45,
+    )
     ax.set_ylabel(ylabel)
-    if log:
+    ax.set_xticks(range(len(rows)))
+    ax.set_xticklabels([SHORT_LABEL.get(label, label) for label in labels])
+    if logy:
         ax.set_yscale("log")
     ax.grid(axis="y", color="#dddddd", linewidth=0.6, alpha=0.85)
     ax.set_axisbelow(True)
-    ax.tick_params(axis="x", rotation=20)
-    ax.yaxis.set_major_formatter(FuncFormatter(lambda x, _: f"{x:,.0f}"))
+    ax.yaxis.set_major_formatter(FuncFormatter(fmt_thousands))
+    if annotate:
+        for bar_obj, val in zip(bars, values):
+            if math.isfinite(val) and val > 0:
+                ax.text(
+                    bar_obj.get_x() + bar_obj.get_width() / 2,
+                    val,
+                    f"{val:,.0f}",
+                    ha="center",
+                    va="bottom",
+                    fontsize=6.8,
+                )
+    fig.savefig(out)
+    plt.close(fig)
+
+
+def line_by_setting(
+    rows: list[dict[str, str]],
+    prefix: str,
+    x_key: str,
+    metric: str,
+    xlabel: str,
+    ylabel: str,
+    out: Path,
+    *,
+    logy: bool = False,
+) -> None:
+    fig, ax = plt.subplots(figsize=(3.45, 2.35))
+    wanted = [
+        "BlobDB no blob cache",
+        "BlobDB 64MB blob",
+        "BlobDB+LORC no blob cache",
+        "BlobDB+LORC 64MB blob",
+    ]
+    for label in wanted:
+        series = [
+            r for r in rows
+            if r["experiment"].startswith(prefix) and r["variant"] == label and r.get("returncode", "1") == "0"
+        ]
+        series.sort(key=lambda r: f(r, x_key))
+        if not series:
+            continue
+        xs = [f(r, x_key) for r in series]
+        ys = [f(r, metric) for r in series]
+        ax.plot(
+            xs,
+            ys,
+            marker="o",
+            linewidth=1.6,
+            markersize=4,
+            color=COLORS[label],
+            label=SHORT_LABEL[label].replace("\n", " "),
+        )
+    ax.set_xlabel(xlabel)
+    ax.set_ylabel(ylabel)
+    if logy:
+        ax.set_yscale("log")
+    ax.grid(axis="both", color="#dddddd", linewidth=0.55, alpha=0.85)
+    ax.set_axisbelow(True)
+    ax.yaxis.set_major_formatter(FuncFormatter(fmt_thousands))
+    ax.legend(frameon=False, ncol=1)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+def ratio_metric(row: dict[str, str], num: str, den: str) -> float:
+    numerator = f(row, num)
+    denominator = f(row, den)
+    if not math.isfinite(numerator) or not math.isfinite(denominator) or denominator <= 0:
+        return math.nan
+    return numerator / denominator
+
+
+def cache_diagnostic(rows: list[dict[str, str]], out: Path) -> None:
+    subset = rows_for(rows, "kvsep_cache_path")
+    labels = [r["variant"] for r in subset]
+    blob_file_mb = [f(r, "rocksdb_blob_file_bytes_read") / MB for r in subset]
+    blob_cache_mb = [f(r, "rocksdb_blob_cache_bytes_read") / MB for r in subset]
+    fig, ax = plt.subplots(figsize=(6.9, 2.4))
+    xs = range(len(subset))
+    ax.bar(
+        xs,
+        blob_file_mb,
+        color="#C44E52",
+        edgecolor="#303030",
+        linewidth=0.35,
+        label="blob file reads",
+    )
+    ax.bar(
+        xs,
+        blob_cache_mb,
+        bottom=blob_file_mb,
+        color="#4C72B0",
+        edgecolor="#303030",
+        linewidth=0.35,
+        label="blob cache reads",
+    )
+    ax.set_ylabel("Blob bytes read (MB)")
+    ax.set_xticks(list(xs))
+    ax.set_xticklabels([SHORT_LABEL.get(label, label) for label in labels])
+    ax.grid(axis="y", color="#dddddd", linewidth=0.55, alpha=0.85)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, ncol=2)
+    fig.savefig(out)
+    plt.close(fig)
+
+
+def lorc_hit_figure(rows: list[dict[str, str]], out: Path) -> None:
+    subset = [r for r in rows if r.get("lorc") == "1" and r.get("returncode", "1") == "0"]
+    fig, ax = plt.subplots(figsize=(3.45, 2.35))
+    xs = range(len(subset))
+    hit_size = [100 * f(r, "lorc_hit_size_rate") for r in subset]
+    full_hit = [100 * f(r, "lorc_full_hit_rate") for r in subset]
+    ax.bar([x - 0.18 for x in xs], hit_size, width=0.36, color="#E15759", label="hit records")
+    ax.bar([x + 0.18 for x in xs], full_hit, width=0.36, color="#F28E2B", label="full scans")
+    ax.set_ylabel("Hit rate (%)")
+    ax.set_xticks(list(xs))
+    ax.set_xticklabels([r["experiment"].replace("kvsep_", "").replace("_", "\n") for r in subset], rotation=0)
+    ax.set_ylim(0, 105)
+    ax.grid(axis="y", color="#dddddd", linewidth=0.55, alpha=0.85)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False)
     fig.savefig(out)
     plt.close(fig)
 
@@ -389,24 +716,43 @@ def generate_figures(summary: Path, fig_dir: Path) -> list[Path]:
     rows = load_rows(summary)
     style()
     fig_dir.mkdir(parents=True, exist_ok=True)
-    labels = [r["variant"] for r in rows]
-    figs = [
-        fig_dir / "eval_kvsep_large_value_throughput.pdf",
-        fig_dir / "eval_kvsep_large_value_p99.pdf",
-    ]
-    bar(labels, [f(r, "throughputops/sec") for r in rows], "Throughput (ops/s)", figs[0])
-    bar(labels, [f(r, "scan_p99_us") for r in rows], "p99 scan latency (us)", figs[1], log=True)
+    figs: list[Path] = []
 
-    # A compact view for the BlobDB memory question.
-    blob_rows = [r for r in rows if r["variant"].startswith("BlobDB")]
-    fig = fig_dir / "eval_kvsep_blob_cache_sensitivity.pdf"
-    bar([r["variant"] for r in blob_rows], [f(r, "throughputops/sec") for r in blob_rows], "Throughput (ops/s)", fig)
-    figs.append(fig)
+    cache_rows = rows_for(rows, "kvsep_cache_path")
+    if cache_rows:
+        for metric, ylabel, name, logy in [
+            ("throughputops/sec", "Throughput (scans/s)", "eval_kvsep_path_throughput.pdf", False),
+            ("scan_p99_us", "p99 scan latency (us)", "eval_kvsep_path_p99.pdf", True),
+            ("rocksdb_iter_bytes_read", "Iterator bytes read", "eval_kvsep_iter_bytes.pdf", True),
+        ]:
+            fig = fig_dir / name
+            grouped_bar(cache_rows, metric, ylabel, fig, logy=logy, annotate=not logy)
+            figs.append(fig)
+        fig = fig_dir / "eval_kvsep_blob_bytes.pdf"
+        cache_diagnostic(rows, fig)
+        figs.append(fig)
 
-    lorc_rows = [r for r in rows if r.get("lorc") == "1"]
-    if lorc_rows:
+    if any(r["experiment"].startswith("kvsep_scan_length_") for r in rows):
+        for metric, ylabel, name, logy in [
+            ("throughputops/sec", "Throughput (scans/s)", "eval_kvsep_scanlen_throughput.pdf", False),
+            ("scan_p99_us", "p99 scan latency (us)", "eval_kvsep_scanlen_p99.pdf", True),
+        ]:
+            fig = fig_dir / name
+            line_by_setting(rows, "kvsep_scan_length_", "scan_length", metric, "Scan length", ylabel, fig, logy=logy)
+            figs.append(fig)
+
+    if any(r["experiment"].startswith("kvsep_hot_ratio_") for r in rows):
+        for metric, ylabel, name, logy in [
+            ("throughputops/sec", "Throughput (scans/s)", "eval_kvsep_hotratio_throughput.pdf", False),
+            ("scan_p99_us", "p99 scan latency (us)", "eval_kvsep_hotratio_p99.pdf", True),
+        ]:
+            fig = fig_dir / name
+            line_by_setting(rows, "kvsep_hot_ratio_", "hot_ratio", metric, "Hot region ratio", ylabel, fig, logy=logy)
+            figs.append(fig)
+
+    if any(r.get("lorc") == "1" for r in rows):
         fig = fig_dir / "eval_kvsep_lorc_hit_rate.pdf"
-        bar([r["variant"] for r in lorc_rows], [100 * f(r, "lorc_hit_size_rate") for r in lorc_rows], "LORC hit size (%)", fig)
+        lorc_hit_figure(rows, fig)
         figs.append(fig)
     return figs
 
@@ -414,6 +760,8 @@ def generate_figures(summary: Path, fig_dir: Path) -> list[Path]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--run-id", default=datetime.now().strftime("%Y%m%d-%H%M%S"))
+    parser.add_argument("--profile", choices=["quick", "full"], default="full")
+    parser.add_argument("--include-direct-probe", action="store_true")
     parser.add_argument("--reload-source", action="store_true")
     parser.add_argument("--skip-load", action="store_true")
     parser.add_argument("--skip-run", action="store_true")
@@ -423,7 +771,18 @@ def main() -> None:
     run_dir = ROOT / "result" / "log" / "vldb" / f"{args.run_id}-kvsep-large-value"
     run_dir.mkdir(parents=True, exist_ok=True)
     workload_dir = run_dir / "workloads"
-    load_workload, run_workload, _, _ = write_workloads(workload_dir)
+
+    load_workload = workload_dir / "kvsep_load.properties"
+    load_workload.parent.mkdir(parents=True, exist_ok=True)
+    load_workload.write_text(
+        workload_text(
+            operationcount=1,
+            warmup_ratio=0,
+            hot_ratio=1.0,
+            scan_length=1,
+            distribution="zipfian",
+        )
+    )
 
     summary = Path(args.summary) if args.summary else run_dir / "summary.csv"
 
@@ -434,7 +793,12 @@ def main() -> None:
     if args.skip_run:
         rows = [dict(r) for r in load_rows(summary)]
     else:
-        rows = [run_variant(variant, run_workload, run_dir) for variant in RUN_VARIANTS]
+        rows = []
+        for exp in experiment_matrix(args.profile, args.include_direct_probe):
+            workload, total_ops, warmup, _ = write_workload(workload_dir, exp)
+            for label in exp.variants:
+                rows.append(run_variant(VARIANT_BY_LABEL[label], exp, workload, run_dir, total_ops, warmup))
+                write_summary(rows, summary)
         write_summary(rows, summary)
 
     paper_fig_dir = PAPER / "figures" / "experiments"

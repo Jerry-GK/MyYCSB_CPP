@@ -16,6 +16,7 @@
 #include <rocksdb/filter_policy.h>
 #include <rocksdb/merge_operator.h>
 #include <rocksdb/physical_range.h>
+#include <rocksdb/statistics.h>
 #include <rocksdb/status.h>
 #include <rocksdb/utilities/options_util.h>
 #include <rocksdb/write_batch.h>
@@ -75,6 +76,9 @@ namespace {
 
   const std::string PROP_LORC_ENABLE_STATS = "rocksdb.lorc_enable_stats";
   const std::string PROP_LORC_ENABLE_STATS_DEFAULT = "false";
+
+  const std::string PROP_ENABLE_ROCKSDB_STATS = "rocksdb.enable_statistics";
+  const std::string PROP_ENABLE_ROCKSDB_STATS_DEFAULT = "false";
 
   const std::string PROP_VALIDATE_SCAN_WITH_ITERATOR = "rocksdb.validate_scan_with_iterator";
   const std::string PROP_VALIDATE_SCAN_WITH_ITERATOR_DEFAULT = "false";
@@ -161,9 +165,17 @@ namespace {
   static std::shared_ptr<rocksdb::Cache> block_cache;
   static std::shared_ptr<rocksdb::Cache> blob_cache;
   static std::shared_ptr<rocksdb::LogicalOrderedRangeCache> range_cache;
+  static std::shared_ptr<rocksdb::Statistics> rocksdb_stats;
 #if ROCKSDB_MAJOR < 8
   static std::shared_ptr<rocksdb::Cache> block_cache_compressed;
 #endif
+
+  void PrintTickerIfStats(const std::shared_ptr<rocksdb::Statistics>& stats,
+                          const char* name, rocksdb::Tickers ticker) {
+    if (stats) {
+      std::cout << " " << name << "=" << stats->getTickerCount(ticker);
+    }
+  }
 } // anonymous
 
 namespace ycsbc {
@@ -301,6 +313,9 @@ void RocksdbDB::Cleanup() {
               << " current_size=" << range_cache->getCurrentSize()
               << " capacity=" << range_cache->getCapacity()
               << " total_range_length=" << range_cache->getTotalRangeLength()
+              << " materialized_entries=" << range_cache->totalMaterializedEntries()
+              << " materialized_key_bytes=" << range_cache->totalMaterializedKeyBytes()
+              << " materialized_value_bytes=" << range_cache->totalMaterializedValueBytes()
               << " full_hit_rate=" << range_cache->fullHitRate()
               << " hit_size_rate=" << range_cache->hitSizeRate()
               << " put_range_num=" << range_cache->getCacheStatistic().getPutRangeNum()
@@ -308,6 +323,21 @@ void RocksdbDB::Cleanup() {
               << " get_range_num=" << range_cache->getCacheStatistic().getGetRangeNum()
               << " avg_get_range_us=" << range_cache->getCacheStatistic().getAvgGetRangeTime()
               << std::endl;
+  }
+  if (rocksdb_stats) {
+    std::cout << "[ROCKSDB_STATS]";
+    PrintTickerIfStats(rocksdb_stats, "block_data_hit", rocksdb::BLOCK_CACHE_DATA_HIT);
+    PrintTickerIfStats(rocksdb_stats, "block_data_miss", rocksdb::BLOCK_CACHE_DATA_MISS);
+    PrintTickerIfStats(rocksdb_stats, "block_bytes_read", rocksdb::BLOCK_CACHE_BYTES_READ);
+    PrintTickerIfStats(rocksdb_stats, "iter_bytes_read", rocksdb::ITER_BYTES_READ);
+    PrintTickerIfStats(rocksdb_stats, "db_seek", rocksdb::NUMBER_DB_SEEK);
+    PrintTickerIfStats(rocksdb_stats, "db_next", rocksdb::NUMBER_DB_NEXT);
+    PrintTickerIfStats(rocksdb_stats, "blob_cache_hit", rocksdb::BLOB_DB_CACHE_HIT);
+    PrintTickerIfStats(rocksdb_stats, "blob_cache_miss", rocksdb::BLOB_DB_CACHE_MISS);
+    PrintTickerIfStats(rocksdb_stats, "blob_cache_bytes_read", rocksdb::BLOB_DB_CACHE_BYTES_READ);
+    PrintTickerIfStats(rocksdb_stats, "blob_file_bytes_read", rocksdb::BLOB_DB_BLOB_FILE_BYTES_READ);
+    PrintTickerIfStats(rocksdb_stats, "blob_next", rocksdb::BLOB_DB_NUM_NEXT);
+    std::cout << std::endl;
   }
   for (size_t i = 0; i < cf_handles_.size(); i++) {
     if (cf_handles_[i] != nullptr) {
@@ -321,6 +351,7 @@ void RocksdbDB::Cleanup() {
   range_cache.reset();
   blob_cache.reset();
   block_cache.reset();
+  rocksdb_stats.reset();
 #if ROCKSDB_MAJOR < 8
   block_cache_compressed.reset();
 #endif
@@ -377,6 +408,11 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
     // Basic options
     if (props.GetProperty(PROP_CREATE_IF_MISSING, PROP_CREATE_IF_MISSING_DEFAULT) == "true") {
       opt->create_if_missing = true;
+    }
+    if (props.GetProperty(PROP_ENABLE_ROCKSDB_STATS,
+                          PROP_ENABLE_ROCKSDB_STATS_DEFAULT) == "true") {
+      rocksdb_stats = rocksdb::CreateDBStatistics();
+      opt->statistics = rocksdb_stats;
     }
     if (props.GetProperty(PROP_DISABLE_AUTO_COMPACTIONS, PROP_DISABLE_AUTO_COMPACTIONS_DEFAULT) == "true") {
       opt->disable_auto_compactions = true;
