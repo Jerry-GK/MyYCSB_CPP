@@ -11,10 +11,13 @@
 #define YCSB_C_UTILS_H_
 
 #include <algorithm>
+#include <cstdlib>
 #include <cstdint>
 #include <exception>
+#include <functional>
 #include <random>
 #include <locale>
+#include <thread>
 
 #if defined(_MSC_VER)
 #if _MSC_VER >= 1911
@@ -48,17 +51,32 @@ inline uint64_t FNVHash64(uint64_t val) {
 
 inline uint64_t Hash(uint64_t val) { return FNVHash64(val); }
 
+inline uint32_t InitialRandomSeed() {
+  const char *seed_env = std::getenv("YCSB_RANDOM_SEED");
+  uint32_t seed = 0;
+  if (seed_env != nullptr && seed_env[0] != '\0') {
+    seed = static_cast<uint32_t>(std::stoul(seed_env));
+  } else {
+    std::random_device rd;
+    seed = rd();
+  }
+  seed ^= static_cast<uint32_t>(
+      std::hash<std::thread::id>{}(std::this_thread::get_id()));
+  return seed == 0 ? 1 : seed;
+}
+
+inline std::minstd_rand &ThreadLocalRandomEngine() {
+  static thread_local std::minstd_rand rn(InitialRandomSeed());
+  return rn;
+}
+
 inline uint32_t ThreadLocalRandomInt() {
-  static thread_local std::random_device rd;
-  static thread_local std::minstd_rand rn(rd());
-  return rn();
+  return ThreadLocalRandomEngine()();
 }
 
 inline double ThreadLocalRandomDouble(double min = 0.0, double max = 1.0) {
-  static thread_local std::random_device rd;
-  static thread_local std::minstd_rand rn(rd());
   static thread_local std::uniform_real_distribution<double> uniform(min, max);
-  return uniform(rn);
+  return uniform(ThreadLocalRandomEngine());
 }
 
 ///

@@ -10,6 +10,7 @@
 
 #include <string>
 #include <mutex>
+#include <vector>
 
 #include "core/db.h"
 #include "utils/properties.h"
@@ -71,6 +72,9 @@ class RocksdbDB : public DB {
   Status ScanSingle(const std::string &table, const std::string &key, int len,
                     const std::vector<std::string> *fields,
                     std::vector<std::vector<Field>> &result);
+  void ValidateScanResult(const std::string &start_key, int len,
+                          const std::vector<std::string> &keys,
+                          const std::vector<std::string> &values);
   Status UpdateSingle(const std::string &table, const std::string &key,
                       std::vector<Field> &values);
   Status UpdateAllFieldsSingle(const std::string &table, const std::string &key,
@@ -95,6 +99,9 @@ class RocksdbDB : public DB {
   int fieldcount_;
   bool disable_wal_;
   bool deserialize_on_read_;
+  bool validate_scan_with_iterator_;
+  int validate_scan_limit_;
+  int validated_scan_count_;
 
   static std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
   static rocksdb::DB *db_;
@@ -107,4 +114,3 @@ DB *NewRocksdbDB();
 } // ycsbc
 
 #endif // YCSB_C_ROCKSDB_DB_H_
-

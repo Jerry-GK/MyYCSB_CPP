@@ -15,9 +15,14 @@
 #include <rocksdb/cache.h>
 #include <rocksdb/filter_policy.h>
 #include <rocksdb/merge_operator.h>
+#include <rocksdb/physical_range.h>
 #include <rocksdb/status.h>
 #include <rocksdb/utilities/options_util.h>
 #include <rocksdb/write_batch.h>
+
+#include <iostream>
+#include <memory>
+#include <sstream>
 
 namespace {
   const std::string PROP_NAME = "rocksdb.dbname";
@@ -64,6 +69,18 @@ namespace {
 
   const std::string PROP_RANGE_CACHE_SIZE = "rocksdb.range_cache_size";
   const std::string PROP_RANGE_CACHE_SIZE_DEFAULT = "0";
+
+  const std::string PROP_RANGE_CACHE_PHYSICAL_TYPE = "rocksdb.range_cache_physical_type";
+  const std::string PROP_RANGE_CACHE_PHYSICAL_TYPE_DEFAULT = "vec";
+
+  const std::string PROP_LORC_ENABLE_STATS = "rocksdb.lorc_enable_stats";
+  const std::string PROP_LORC_ENABLE_STATS_DEFAULT = "false";
+
+  const std::string PROP_VALIDATE_SCAN_WITH_ITERATOR = "rocksdb.validate_scan_with_iterator";
+  const std::string PROP_VALIDATE_SCAN_WITH_ITERATOR_DEFAULT = "false";
+
+  const std::string PROP_VALIDATE_SCAN_LIMIT = "rocksdb.validate_scan_limit";
+  const std::string PROP_VALIDATE_SCAN_LIMIT_DEFAULT = "0";
 
   const std::string PROP_COMPRESSION = "rocksdb.compression";
   const std::string PROP_COMPRESSION_DEFAULT = "no";
@@ -222,6 +239,13 @@ void RocksdbDB::Init() {
                                             CoreWorkload::FIELD_COUNT_DEFAULT));
   disable_wal_ = (props.GetProperty(PROP_DISABLE_WAL, PROP_DISABLE_WAL_DEFAULT) == "true");
   deserialize_on_read_ = (props.GetProperty(PROP_DESERIALIZE_ON_READ, PROP_DESERIALIZE_ON_READ_DEFAULT) == "true");
+  validate_scan_with_iterator_ =
+      (props.GetProperty(PROP_VALIDATE_SCAN_WITH_ITERATOR,
+                         PROP_VALIDATE_SCAN_WITH_ITERATOR_DEFAULT) == "true");
+  validate_scan_limit_ =
+      std::stoi(props.GetProperty(PROP_VALIDATE_SCAN_LIMIT,
+                                  PROP_VALIDATE_SCAN_LIMIT_DEFAULT));
+  validated_scan_count_ = 0;
 
   ref_cnt_++;
   if (db_) {
@@ -272,6 +296,19 @@ void RocksdbDB::Cleanup() {
   if (--ref_cnt_) {
     return;
   }
+  if (range_cache) {
+    std::cout << "[LORC_STATS]"
+              << " current_size=" << range_cache->getCurrentSize()
+              << " capacity=" << range_cache->getCapacity()
+              << " total_range_length=" << range_cache->getTotalRangeLength()
+              << " full_hit_rate=" << range_cache->fullHitRate()
+              << " hit_size_rate=" << range_cache->hitSizeRate()
+              << " put_range_num=" << range_cache->getCacheStatistic().getPutRangeNum()
+              << " avg_put_range_us=" << range_cache->getCacheStatistic().getAvgPutRangeTime()
+              << " get_range_num=" << range_cache->getCacheStatistic().getGetRangeNum()
+              << " avg_get_range_us=" << range_cache->getCacheStatistic().getAvgGetRangeTime()
+              << std::endl;
+  }
   for (size_t i = 0; i < cf_handles_.size(); i++) {
     if (cf_handles_[i] != nullptr) {
       db_->DestroyColumnFamilyHandle(cf_handles_[i]);
@@ -279,6 +316,15 @@ void RocksdbDB::Cleanup() {
     }
   }
   delete db_;
+  db_ = nullptr;
+  cf_handles_.clear();
+  range_cache.reset();
+  blob_cache.reset();
+  block_cache.reset();
+#if ROCKSDB_MAJOR < 8
+  block_cache_compressed.reset();
+#endif
+  env_guard.reset();
 }
 
 void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt,
@@ -362,7 +408,19 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
 
     size_t range_cache_size = std::stoul(props.GetProperty(PROP_RANGE_CACHE_SIZE, PROP_RANGE_CACHE_SIZE_DEFAULT));
     if (range_cache_size > 0) {
-      range_cache = rocksdb::NewRBTreeLogicalOrderedRangeCache(range_cache_size, rocksdb::LorcLogger::Level::WARN, rocksdb::PhysicalRangeType::VEC);
+      const std::string physical_type =
+          props.GetProperty(PROP_RANGE_CACHE_PHYSICAL_TYPE, PROP_RANGE_CACHE_PHYSICAL_TYPE_DEFAULT);
+      rocksdb::PhysicalRangeType range_type = rocksdb::PhysicalRangeType::VEC;
+      if (physical_type == "continuous") {
+        range_type = rocksdb::PhysicalRangeType::CONTINUOUS;
+      } else if (physical_type != "vec") {
+        throw utils::Exception("Unknown rocksdb.range_cache_physical_type: " + physical_type);
+      }
+      range_cache = rocksdb::NewRBTreeLogicalOrderedRangeCache(range_cache_size, rocksdb::LorcLogger::Level::WARN, range_type);
+      if (props.GetProperty(PROP_LORC_ENABLE_STATS,
+                            PROP_LORC_ENABLE_STATS_DEFAULT) == "true") {
+        range_cache->setEnableStatistic(true);
+      }
       opt->range_cache = range_cache;
     }
 
@@ -540,18 +598,75 @@ DB::Status RocksdbDB::ReadSingle(const std::string &table, const std::string &ke
   return kOK;
 }
 
+void RocksdbDB::ValidateScanResult(const std::string &start_key, int len,
+                                   const std::vector<std::string> &keys,
+                                   const std::vector<std::string> &values) {
+  if (!validate_scan_with_iterator_) {
+    return;
+  }
+  if (validate_scan_limit_ > 0 && validated_scan_count_ >= validate_scan_limit_) {
+    return;
+  }
+  if (len <= 0) {
+    return;
+  }
+  validated_scan_count_++;
+
+  rocksdb::ReadOptions read_options;
+  read_options.read_tier = rocksdb::kReadAllTier;
+  std::unique_ptr<rocksdb::Iterator> it(
+      db_->NewIterator(read_options, db_->DefaultColumnFamily()));
+
+  std::vector<std::string> expected_keys;
+  std::vector<std::string> expected_values;
+  expected_keys.reserve(static_cast<size_t>(len));
+  expected_values.reserve(static_cast<size_t>(len));
+  for (it->Seek(start_key);
+       it->Valid() && expected_keys.size() < static_cast<size_t>(len);
+       it->Next()) {
+    expected_keys.emplace_back(it->key().ToString());
+    expected_values.emplace_back(it->value().ToString());
+  }
+  if (!it->status().ok()) {
+    throw utils::Exception(std::string("RocksDB scan validation iterator: ") +
+                           it->status().ToString());
+  }
+
+  if (keys.size() != expected_keys.size() || values.size() != expected_values.size()) {
+    std::ostringstream oss;
+    oss << "LORC scan validation mismatch for start key " << start_key
+        << ": returned " << keys.size() << " keys/" << values.size()
+        << " values, expected " << expected_keys.size() << " keys/"
+        << expected_values.size() << " values";
+    throw utils::Exception(oss.str());
+  }
+
+  for (size_t i = 0; i < keys.size(); i++) {
+    if (keys[i] != expected_keys[i] || values[i] != expected_values[i]) {
+      std::ostringstream oss;
+      oss << "LORC scan validation mismatch for start key " << start_key
+          << " at offset " << i << ": returned key=" << keys[i]
+          << " value_size=" << values[i].size()
+          << ", expected key=" << expected_keys[i]
+          << " value_size=" << expected_values[i].size();
+      throw utils::Exception(oss.str());
+    }
+  }
+}
+
 DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &key, int len,
                                  const std::vector<std::string> *fields,
                                  std::vector<std::vector<Field>> &result) {
   std::vector<std::string> keys;
   std::vector<std::string> values;
   rocksdb::Status s = db_->Scan(rocksdb::ReadOptions(), db_->DefaultColumnFamily(), rocksdb::Slice(key), len, &keys, &values);
+  if (!s.ok()) {
+    throw utils::Exception(std::string("RocksDB Scan: ") + s.ToString());
+  }
+  ValidateScanResult(key, len, keys, values);
 
   if (deserialize_on_read_) {
     for (size_t i = 0; i < keys.size(); i++) {
-      if (!s.ok()) {
-        throw utils::Exception(std::string("RocksDB Scan: ") + s.ToString());
-      }
       std::string &data = values[i];
       result.push_back(std::vector<Field>());
       std::vector<Field> &field_value = result.back();
@@ -559,7 +674,7 @@ DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &ke
         DeserializeRowFilter(field_value, data, *fields);
       } else {
         DeserializeRow(field_value, data);
-        assert(values.size() == static_cast<size_t>(fieldcount_));
+        assert(field_value.size() == static_cast<size_t>(fieldcount_));
       }
     }
   }
