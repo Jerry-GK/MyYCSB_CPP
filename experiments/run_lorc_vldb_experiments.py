@@ -710,7 +710,25 @@ def generate_figures(summary: Path, fig_dir: Path) -> list[Path]:
     save("eval_cache_size_p99.pdf")
 
     plt.figure(figsize=(3.45, 2.45))
-    line_by_variant(plt.gca(), cache_rows, "experiment_cache_mb", "lorc_hit_size_rate", "Hit-record ratio", "Range cache size (MB)")
+    ax = plt.gca()
+    for label in [v.label for v in VARIANTS if v.lorc]:
+        sub = sorted([r for r in cache_rows if r["variant"] == label], key=lambda r: f(r, "experiment_cache_mb"))
+        if not sub:
+            continue
+        ax.plot(
+            [f(r, "experiment_cache_mb") for r in sub],
+            [100.0 * f(r, "lorc_hit_size_rate") for r in sub],
+            marker="o",
+            linewidth=1.8,
+            label=label,
+            color=COLORS.get(label),
+        )
+    ax.set_xlabel("Range cache size (MB)")
+    ax.set_ylabel("Hit-record rate (%)")
+    ax.set_ylim(0, 105)
+    ax.grid(True, color="#dddddd", linewidth=0.6, alpha=0.8)
+    ax.set_axisbelow(True)
+    ax.legend(frameon=False, ncol=1, loc="lower right")
     save("eval_cache_size_hit_rate.pdf")
 
     mix_rows = select(rows, prefix="mix_scan_")
