@@ -112,6 +112,8 @@ Coverage MeasureCoverage(rocksdb::LogicalOrderedRangeCache* cache, uint64_t star
 
 struct Result {
   std::string policy;
+  std::string old_chunk_bitmap;
+  std::string new_chunk_bitmap;
   size_t hot_hit_records;
   size_t hot_cached_parts;
   size_t hot_gap_parts;
@@ -124,6 +126,23 @@ struct Result {
   size_t current_size;
   size_t total_records;
 };
+
+std::string ChunkBitmap(rocksdb::LogicalOrderedRangeCache* cache, uint64_t start_key,
+                        uint64_t chunks, uint64_t chunk_len) {
+  std::string out;
+  out.reserve(chunks);
+  for (uint64_t chunk = 0; chunk < chunks; ++chunk) {
+    size_t hits = 0;
+    uint64_t base = start_key + chunk * chunk_len;
+    for (uint64_t i = 0; i < chunk_len; ++i) {
+      if (Contains(cache, base + i)) {
+        ++hits;
+      }
+    }
+    out.push_back(hits >= chunk_len / 2 ? '1' : '0');
+  }
+  return out;
+}
 
 Result RunPolicy(const std::string& policy) {
   constexpr uint64_t kChunkLen = 128;
@@ -162,6 +181,8 @@ Result RunPolicy(const std::string& policy) {
   Coverage crossing = MeasureCoverage(cache.get(), 0, 12 * kChunkLen);
   Coverage newer = MeasureCoverage(cache.get(), 100000, 5 * kChunkLen);
   return Result{policy,
+                ChunkBitmap(cache.get(), 0, 12, kChunkLen),
+                ChunkBitmap(cache.get(), 100000, 9, kChunkLen),
                 hot.hit_records,
                 hot.cached_parts,
                 hot.gap_parts,
@@ -178,13 +199,15 @@ Result RunPolicy(const std::string& policy) {
 }  // namespace
 
 int main() {
-  std::cout << "policy,hot_hit_records,hot_cached_parts,hot_gap_parts,"
+  std::cout << "policy,old_chunk_bitmap,new_chunk_bitmap,"
+               "hot_hit_records,hot_cached_parts,hot_gap_parts,"
                "crossing_hit_records,crossing_cached_parts,crossing_gap_parts,"
                "new_hit_records,new_cached_parts,new_gap_parts,"
                "current_size,total_records\n";
   for (const std::string policy : {"boundary_lru", "physical_lru", "shortest_range"}) {
     Result r = RunPolicy(policy);
-    std::cout << r.policy << "," << r.hot_hit_records << ","
+    std::cout << r.policy << "," << r.old_chunk_bitmap << ","
+              << r.new_chunk_bitmap << "," << r.hot_hit_records << ","
               << r.hot_cached_parts << "," << r.hot_gap_parts << ","
               << r.crossing_hit_records << "," << r.crossing_cached_parts << ","
               << r.crossing_gap_parts << "," << r.new_hit_records << ","

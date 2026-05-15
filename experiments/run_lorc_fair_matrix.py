@@ -647,6 +647,20 @@ def make_plan(
             timeout=1800,
         )
 
+    large_value_dataset = value_dataset(8192)
+    for scan_length in [5, 10, 20, 50, 100]:
+        add_suite(
+            suite="large_value_scan_length",
+            x_value=str(scan_length),
+            x_label=str(scan_length),
+            dataset=large_value_dataset,
+            suite_measured_ops=max(10_000, measured_ops // 5),
+            scan_length=scan_length,
+            min_warmup_ops=30_000,
+            coverage_factor=20.0,
+            timeout=2400,
+        )
+
     for cache_budget_mb in [16, 32, 64, 128]:
         add_suite(
             suite="cache_budget",
@@ -1061,6 +1075,58 @@ def make_metric_row(rows: list[dict], *, suite: str, out_path: Path, title_prefi
     plt.close(fig)
 
 
+def make_workload_figure(rows: list[dict], out_path: Path) -> None:
+    setup_style()
+    suite_rows = [r for r in rows if r["suite"] == "workload"]
+    if not suite_rows:
+        return
+    scan_share = {
+        "scan100": 1.0,
+        "scan50_read50": 0.5,
+        "scan10_read90": 0.1,
+        "upd5_scan50": 0.5,
+    }
+
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.25), constrained_layout=True)
+    grouped_bars(
+        axes[0],
+        rows,
+        metric="throughputops/sec",
+        transform=lambda v: v / 1000.0,
+        ylabel="K scans/s equiv.",
+        suite="workload",
+        title="workload: scan throughput",
+    )
+    for container, variant in zip(axes[0].containers, [v for v in VARIANT_ORDER if any(r["variant"] == v for r in suite_rows)]):
+        for patch, (_, x_label) in zip(container.patches, [(r["x_value"], r["x_label"]) for r in suite_rows if r["variant"] == variant]):
+            x_value = next(r["x_value"] for r in suite_rows if r["variant"] == variant and r["x_label"] == x_label)
+            patch.set_height(patch.get_height() * scan_share.get(x_value, 0.0))
+    axes[0].relim()
+    axes[0].autoscale_view()
+    grouped_bars(
+        axes[1],
+        rows,
+        metric="scan_p99_us",
+        ylabel="p99 scan (us)",
+        suite="workload",
+        title="workload: p99",
+    )
+    handles, labels = axes[0].get_legend_handles_labels()
+    fig.legend(
+        handles,
+        labels,
+        loc="upper center",
+        ncol=5,
+        bbox_to_anchor=(0.5, 1.14),
+        frameon=False,
+        columnspacing=1.0,
+        handlelength=1.2,
+    )
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(out_path, bbox_inches="tight")
+    plt.close(fig)
+
+
 def make_memory_figure(rows: list[dict], out_path: Path) -> None:
     setup_style()
     fig, ax = plt.subplots(figsize=(7.2, 2.35), constrained_layout=True)
@@ -1215,10 +1281,11 @@ def make_figures(summary: Path, figure_dir: Path) -> None:
     )
     make_metric_row(
         rows,
-        suite="workload",
-        out_path=figure_dir / "eval_fair_workload.pdf",
-        title_prefix="workload",
+        suite="large_value_scan_length",
+        out_path=figure_dir / "eval_large_value_scan_length.pdf",
+        title_prefix="8KB scan length",
     )
+    make_workload_figure(rows, figure_dir / "eval_fair_workload.pdf")
     make_metric_row(
         rows,
         suite="cache_budget",

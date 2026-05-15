@@ -8,6 +8,7 @@ import subprocess
 from pathlib import Path
 
 import matplotlib.pyplot as plt
+from matplotlib.colors import ListedColormap
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -66,71 +67,36 @@ def plot(rows: list[dict[str, str]]) -> None:
     labels = ["Boundary-LRU", "Physical LRU", "Shortest-range"]
     policy_order = ["boundary_lru", "physical_lru", "shortest_range"]
     by_policy = {r["policy"]: r for r in rows}
-    hot_hit = [
-        100.0 * float(by_policy[p]["hot_hit_records"]) / 256.0 for p in policy_order
-    ]
-    new_hit = [
-        100.0 * float(by_policy[p]["new_hit_records"]) / 640.0 for p in policy_order
-    ]
-    crossing_parts = [float(by_policy[p]["crossing_cached_parts"]) for p in policy_order]
-    gaps = [float(by_policy[p]["crossing_gap_parts"]) for p in policy_order]
+    old_bitmap = [[1 if c == "1" else 0 for c in by_policy[p]["old_chunk_bitmap"]] for p in policy_order]
+    new_bitmap = [[1 if c == "1" else 0 for c in by_policy[p]["new_chunk_bitmap"]] for p in policy_order]
+    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.15), gridspec_kw={"width_ratios": [1.35, 1.0]})
+    cmap = ListedColormap(["#F2F2F2", "#4E79A7"])
 
-    fig, axes = plt.subplots(1, 2, figsize=(7.0, 2.45))
-    colors = ["#F28E2B", "#4E79A7", "#8C6D31"]
-    width = 0.36
-    xs = range(len(labels))
-    axes[0].bar(
-        [x - width / 2 for x in xs],
-        hot_hit,
-        width=width,
-        label="Old hot island",
-        color="#F28E2B",
-        edgecolor="#303030",
-        linewidth=0.5,
-    )
-    axes[0].bar(
-        [x + width / 2 for x in xs],
-        new_hit,
-        width=width,
-        label="New hot range",
-        color="#4E79A7",
-        edgecolor="#303030",
-        linewidth=0.5,
-    )
-    axes[0].set_xticks(list(xs))
-    axes[0].set_xticklabels(labels)
-    axes[0].set_ylabel("Hit rate (%)")
-    axes[0].set_ylim(0, 105)
-    axes[0].legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, 1.26), ncol=2)
-    axes[0].grid(axis="y", color="#dddddd", linewidth=0.6)
+    axes[0].imshow(old_bitmap, aspect="auto", cmap=cmap, vmin=0, vmax=1)
+    axes[0].axvspan(4.5, 6.5, facecolor="#F28E2B", alpha=0.22, linewidth=0)
+    axes[0].set_title("Old range coverage")
+    axes[0].set_yticks(range(len(labels)))
+    axes[0].set_yticklabels(labels)
+    axes[0].set_xticks([0, 5, 11])
+    axes[0].set_xticklabels(["left", "hot", "right"])
+    axes[0].tick_params(axis="both", length=0)
+    for x in range(13):
+        axes[0].axvline(x - 0.5, color="white", linewidth=0.5)
+    for y in range(4):
+        axes[0].axhline(y - 0.5, color="white", linewidth=0.5)
 
-    axes[1].bar(
-        [x - width / 2 for x in xs],
-        crossing_parts,
-        width=width,
-        label="Cached pieces",
-        color="#59A14F",
-        edgecolor="#303030",
-        linewidth=0.5,
-    )
-    axes[1].bar(
-        [x + width / 2 for x in xs],
-        gaps,
-        width=width,
-        label="Gaps",
-        color="#E15759",
-        edgecolor="#303030",
-        linewidth=0.5,
-    )
-    axes[1].set_xticks(list(xs))
-    axes[1].set_xticklabels(labels)
-    axes[1].set_ylabel("Crossing-scan pieces")
-    axes[1].legend(frameon=False, loc="upper center", bbox_to_anchor=(0.5, 1.26), ncol=2)
-    axes[1].grid(axis="y", color="#dddddd", linewidth=0.6)
-    for ax in axes:
-        ax.set_axisbelow(True)
-        ax.tick_params(axis="x", rotation=16)
-    fig.tight_layout(w_pad=1.5)
+    axes[1].imshow(new_bitmap, aspect="auto", cmap=cmap, vmin=0, vmax=1)
+    axes[1].set_title("New range coverage")
+    axes[1].set_yticks(range(len(labels)))
+    axes[1].set_yticklabels([])
+    axes[1].set_xticks([0, 4, 8])
+    axes[1].set_xticklabels(["start", "mid", "end"])
+    axes[1].tick_params(axis="both", length=0)
+    for x in range(10):
+        axes[1].axvline(x - 0.5, color="white", linewidth=0.5)
+    for y in range(4):
+        axes[1].axhline(y - 0.5, color="white", linewidth=0.5)
+    fig.tight_layout(w_pad=1.1)
     fig.savefig(FIG)
     plt.close(fig)
 
