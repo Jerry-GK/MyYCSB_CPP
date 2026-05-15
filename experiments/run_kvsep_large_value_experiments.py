@@ -737,7 +737,6 @@ def generate_figures(summary: Path, fig_dir: Path) -> list[Path]:
         for metric, ylabel, name, logy in [
             ("throughputops/sec", "Throughput (scans/s)", "eval_kvsep_path_throughput.pdf", False),
             ("scan_p99_us", "p99 scan latency (us)", "eval_kvsep_path_p99.pdf", True),
-            ("rocksdb_iter_bytes_read", "Iterator bytes read", "eval_kvsep_iter_bytes.pdf", True),
         ]:
             fig = fig_dir / name
             grouped_bar(cache_rows, metric, ylabel, fig, logy=logy, annotate=not logy)
