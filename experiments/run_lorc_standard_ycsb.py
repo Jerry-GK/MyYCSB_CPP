@@ -2,10 +2,9 @@
 """Run standard YCSB A-F workloads for the five-system LORC matrix.
 
 The measured phase keeps the standard YCSB workload proportions and defaults
-from workloads/workloada through workloads/workloadf. By default, A/B/C/D/F do
-not receive extra point warmup and LORC point expansion is disabled, so this
-figure remains a standard-YCSB sanity check rather than a point-cache benchmark.
-Workload E receives scan warmup because it is the standard scan workload.
+from workloads/workloada through workloads/workloadf. A/B/C/D/F use randomized
+read warmup for the bounded point-neighborhood expansion path; E receives scan
+warmup because it is the standard range-scan workload.
 """
 
 from __future__ import annotations
@@ -34,6 +33,7 @@ STANDARD_OPERATIONCOUNT = 100_000
 STANDARD_TAG = "standard-ycsb-100k"
 DEFAULT_POINT_WARMUP_OPS = 20_000
 DEFAULT_POINT_EXPANSION_ENTRIES = 64
+FULL_WORKLOAD_SET = {"a", "b", "c", "d", "e", "f"}
 
 
 def workload_path(workload: str) -> Path:
@@ -148,6 +148,10 @@ def run_experiment(
                 db_path = work_db
 
             props = fair.system_props(variant, budget, direct_reads="false")
+            if variant.engine == "lsbm":
+                props["leveldb.deserialize_on_read"] = "true"
+            else:
+                props["rocksdb.deserialize_on_read"] = "true"
             if variant.lorc:
                 props["rocksdb.lorc_point_expansion_entries"] = str(point_expansion_entries)
             if writes:
@@ -242,12 +246,7 @@ def plot(summary: Path, figure: Path) -> None:
         (r["workload"], r["variant"]): float(r["throughput_ops_sec"])
         for r in rows
     }
-    primary_p99 = {}
-    for r in rows:
-        metric = "scan_p99_us" if r["workload"] == "E" else "read_p99_us"
-        primary_p99[(r["workload"], r["variant"])] = float(r[metric])
     rocks_throughput = {w: throughput[(w, "RocksDB")] for w in workloads}
-    rocks_p99 = {w: max(primary_p99[(w, "RocksDB")], 1e-9) for w in workloads}
 
     plt.rcParams.update(
         {
@@ -267,10 +266,10 @@ def plot(summary: Path, figure: Path) -> None:
     hatches = [fair.HATCHES[v] for v in variants]
     width = 0.15
     xs = list(range(len(workloads)))
-    fig, axes = plt.subplots(2, 1, figsize=(7.35, 4.15), sharex=True)
+    fig, ax = plt.subplots(figsize=(7.35, 2.45))
     for i, variant in enumerate(variants):
         values = [throughput[(w, variant)] / rocks_throughput[w] for w in workloads]
-        bars = axes[0].bar(
+        bars = ax.bar(
             [x + (i - 2) * width for x in xs],
             values,
             width,
@@ -281,35 +280,15 @@ def plot(summary: Path, figure: Path) -> None:
         )
         for bar in bars:
             bar.set_hatch(hatches[i])
-    for i, variant in enumerate(variants):
-        values = [max(primary_p99[(w, variant)], 1e-9) / rocks_p99[w] for w in workloads]
-        bars = axes[1].bar(
-            [x + (i - 2) * width for x in xs],
-            values,
-            width,
-            label=variant,
-            color=colors[i],
-            edgecolor="#222222",
-            linewidth=0.45,
-        )
-        for bar in bars:
-            bar.set_hatch(hatches[i])
-    axes[0].axhline(1.0, color="#666666", linewidth=0.8, linestyle="--")
-    axes[1].axhline(1.0, color="#666666", linewidth=0.8, linestyle="--")
-    axes[0].set_ylabel("Throughput\n(RocksDB=1)")
-    axes[1].set_ylabel("Primary p99\n(RocksDB=1)")
-    axes[1].set_yscale("log")
-    axes[1].set_ylim(0.45, 15)
-    axes[1].set_yticks([0.5, 1, 2, 5, 10])
-    axes[1].set_yticklabels(["0.5", "1", "2", "5", "10"])
-    axes[1].set_xticks(xs)
-    axes[1].set_xticklabels([f"YCSB-{w}" for w in workloads])
-    for ax in axes:
-        ax.grid(axis="y", color="#E7E7E7", linewidth=0.65)
-        ax.set_axisbelow(True)
-    axes[0].legend(
+    ax.axhline(1.0, color="#666666", linewidth=0.8, linestyle="--")
+    ax.set_ylabel("Relative throughput")
+    ax.set_xticks(xs)
+    ax.set_xticklabels([f"YCSB-{w}" for w in workloads])
+    ax.grid(axis="y", color="#E7E7E7", linewidth=0.65)
+    ax.set_axisbelow(True)
+    ax.legend(
         loc="upper center",
-        bbox_to_anchor=(0.5, 1.5),
+        bbox_to_anchor=(0.5, 1.32),
         ncol=5,
         frameon=False,
         columnspacing=0.9,
@@ -335,17 +314,31 @@ def main() -> int:
     args = parser.parse_args()
 
     out_dir = args.out or (ROOT / "result" / "log" / f"lorc_standard_ycsb_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
-    figure = PAPER / "figures" / "experiments" / "eval_standard_ycsb_af.pdf"
     paper_summary = PAPER / "figures" / "experiments" / "lorc_standard_ycsb_summary.csv"
 
     if args.plot_only:
         if not args.summary:
             raise SystemExit("--plot-only requires --summary")
+        with args.summary.open() as f:
+            summary_workloads = {r["workload"].lower() for r in csv.DictReader(f)}
+        figure = (
+            PAPER / "figures" / "experiments" / "eval_standard_ycsb_af.pdf"
+            if summary_workloads == FULL_WORKLOAD_SET
+            else args.summary.parent / "eval_standard_ycsb_af.pdf"
+        )
         plot(args.summary, figure)
-        paper_summary.write_text(args.summary.read_text())
+        if summary_workloads == FULL_WORKLOAD_SET:
+            paper_summary.write_text(args.summary.read_text())
         print(f"summary={args.summary}")
         print(f"figure={figure}")
         return 0
+
+    workloads = [w.strip().lower() for w in args.workloads.split(",") if w.strip()]
+    figure = (
+        PAPER / "figures" / "experiments" / "eval_standard_ycsb_af.pdf"
+        if set(workloads) == FULL_WORKLOAD_SET
+        else out_dir / "eval_standard_ycsb_af.pdf"
+    )
 
     summary = run_experiment(
         out_dir=out_dir,
@@ -354,12 +347,14 @@ def main() -> int:
         e_warmup_ops=args.e_warmup_ops,
         point_warmup_ops=args.point_warmup_ops,
         point_expansion_entries=args.point_expansion_entries,
-        workloads=[w.strip().lower() for w in args.workloads.split(",") if w.strip()],
+        workloads=workloads,
     )
     plot(summary, figure)
-    paper_summary.write_text(summary.read_text())
+    if set(workloads) == FULL_WORKLOAD_SET:
+        paper_summary.write_text(summary.read_text())
     print(f"summary={summary}")
-    print(f"paper_summary={paper_summary}")
+    if set(workloads) == FULL_WORKLOAD_SET:
+        print(f"paper_summary={paper_summary}")
     print(f"figure={figure}")
     return 0
 
