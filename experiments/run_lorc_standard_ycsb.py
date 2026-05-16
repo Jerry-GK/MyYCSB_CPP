@@ -2,10 +2,10 @@
 """Run standard YCSB A-F workloads for the five-system LORC matrix.
 
 The measured phase keeps the standard YCSB workload proportions and defaults
-from workloads/workloada through workloads/workloadf. Workload E receives
-scan warmup because it is the standard scan workload; A/B/C/D/F receive read
-warmup so LORC's bounded point-expansion path is measured after it has had a
-fair chance to materialize clustered point neighborhoods.
+from workloads/workloada through workloads/workloadf. By default, A/B/C/D/F do
+not receive extra point warmup and LORC point expansion is disabled, so this
+figure remains a standard-YCSB sanity check rather than a point-cache benchmark.
+Workload E receives scan warmup because it is the standard scan workload.
 """
 
 from __future__ import annotations
@@ -32,8 +32,8 @@ GB = fair.GB
 STANDARD_RECORDCOUNT = 100_000
 STANDARD_OPERATIONCOUNT = 100_000
 STANDARD_TAG = "standard-ycsb-100k"
-POINT_WARMUP_OPS = 100_000
-POINT_EXPANSION_ENTRIES = 1024
+DEFAULT_POINT_WARMUP_OPS = 0
+DEFAULT_POINT_EXPANSION_ENTRIES = 64
 
 
 def workload_path(workload: str) -> Path:
@@ -115,6 +115,8 @@ def run_experiment(
     budget: int,
     reload_sources: bool,
     e_warmup_ops: int,
+    point_warmup_ops: int,
+    point_expansion_entries: int,
     workloads: list[str],
 ) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -127,7 +129,7 @@ def run_experiment(
         workload_file = generated_workload(
             workload_dir,
             workload,
-            warmup_ops=e_warmup_ops if workload == "e" else POINT_WARMUP_OPS,
+            warmup_ops=e_warmup_ops if workload == "e" else point_warmup_ops,
             warmup_operation="scan" if workload == "e" else "read",
         )
         writes = workload_has_writes(workload)
@@ -147,14 +149,7 @@ def run_experiment(
 
             props = fair.system_props(variant, budget, direct_reads="false")
             if variant.lorc:
-                props["rocksdb.lorc_point_expansion_entries"] = str(POINT_EXPANSION_ENTRIES)
-            if variant.label == "BlobDB+LORC":
-                # Standard YCSB uses small/default values. The large-value
-                # KV-separation-aware path is evaluated separately; here the
-                # generic range materialization path avoids unnecessary
-                # per-range value-state checks on short scans.
-                props["rocksdb.lorc_value_separation_aware"] = "false"
-                props["rocksdb.lorc_bypass_lower_cache_on_refill"] = "false"
+                props["rocksdb.lorc_point_expansion_entries"] = str(point_expansion_entries)
             if writes:
                 if variant.engine == "lsbm":
                     props.update(
@@ -205,10 +200,10 @@ def run_experiment(
                     "writes": int(writes),
                     "cache_budget_bytes": budget,
                     "operationcount": STANDARD_OPERATIONCOUNT,
-                    "warmup_ops": e_warmup_ops if workload == "e" else POINT_WARMUP_OPS,
+                    "warmup_ops": e_warmup_ops if workload == "e" else point_warmup_ops,
                     "warmup_operation": "scan" if workload == "e" else "read",
                     "direct_reads": 0,
-                    "lorc_point_expansion_entries": POINT_EXPANSION_ENTRIES if variant.lorc else 0,
+                    "lorc_point_expansion_entries": point_expansion_entries if variant.lorc else 0,
                     "throughput_ops_sec": float(parsed.get("throughputops/sec", 0.0)),
                     "read_avg_us": float(parsed.get("read_avg_us", 0.0)),
                     "read_p99_us": float(parsed.get("read_p99_us", 0.0)),
@@ -306,6 +301,8 @@ def main() -> int:
     parser.add_argument("--reload-sources", action="store_true")
     parser.add_argument("--budget-mb", type=int, default=1024)
     parser.add_argument("--e-warmup-ops", type=int, default=40_000)
+    parser.add_argument("--point-warmup-ops", type=int, default=DEFAULT_POINT_WARMUP_OPS)
+    parser.add_argument("--point-expansion-entries", type=int, default=DEFAULT_POINT_EXPANSION_ENTRIES)
     parser.add_argument("--workloads", default="a,b,c,d,e,f")
     args = parser.parse_args()
 
@@ -327,6 +324,8 @@ def main() -> int:
         budget=args.budget_mb * MB,
         reload_sources=args.reload_sources,
         e_warmup_ops=args.e_warmup_ops,
+        point_warmup_ops=args.point_warmup_ops,
+        point_expansion_entries=args.point_expansion_entries,
         workloads=[w.strip().lower() for w in args.workloads.split(",") if w.strip()],
     )
     plot(summary, figure)
