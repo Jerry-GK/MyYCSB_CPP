@@ -32,7 +32,7 @@ GB = fair.GB
 STANDARD_RECORDCOUNT = 100_000
 STANDARD_OPERATIONCOUNT = 100_000
 STANDARD_TAG = "standard-ycsb-100k"
-DEFAULT_POINT_WARMUP_OPS = 0
+DEFAULT_POINT_WARMUP_OPS = 20_000
 DEFAULT_POINT_EXPANSION_ENTRIES = 64
 
 
@@ -238,8 +238,16 @@ def plot(summary: Path, figure: Path) -> None:
 
     workloads = sorted({r["workload"] for r in rows})
     variants = [v.label for v in fair.VARIANTS]
-    index = {(r["workload"], r["variant"]): float(r["throughput_ops_sec"]) for r in rows}
-    rocks_base = {w: index[(w, "RocksDB")] for w in workloads}
+    throughput = {
+        (r["workload"], r["variant"]): float(r["throughput_ops_sec"])
+        for r in rows
+    }
+    primary_p99 = {}
+    for r in rows:
+        metric = "scan_p99_us" if r["workload"] == "E" else "read_p99_us"
+        primary_p99[(r["workload"], r["variant"])] = float(r[metric])
+    rocks_throughput = {w: throughput[(w, "RocksDB")] for w in workloads}
+    rocks_p99 = {w: max(primary_p99[(w, "RocksDB")], 1e-9) for w in workloads}
 
     plt.rcParams.update(
         {
@@ -259,10 +267,10 @@ def plot(summary: Path, figure: Path) -> None:
     hatches = [fair.HATCHES[v] for v in variants]
     width = 0.15
     xs = list(range(len(workloads)))
-    fig, ax = plt.subplots(figsize=(7.35, 2.45))
+    fig, axes = plt.subplots(2, 1, figsize=(7.35, 4.15), sharex=True)
     for i, variant in enumerate(variants):
-        values = [index[(w, variant)] / rocks_base[w] for w in workloads]
-        bars = ax.bar(
+        values = [throughput[(w, variant)] / rocks_throughput[w] for w in workloads]
+        bars = axes[0].bar(
             [x + (i - 2) * width for x in xs],
             values,
             width,
@@ -273,15 +281,35 @@ def plot(summary: Path, figure: Path) -> None:
         )
         for bar in bars:
             bar.set_hatch(hatches[i])
-    ax.axhline(1.0, color="#666666", linewidth=0.8, linestyle="--")
-    ax.set_ylabel("Relative throughput\n(RocksDB=1)")
-    ax.set_xticks(xs)
-    ax.set_xticklabels([f"YCSB-{w}" for w in workloads])
-    ax.grid(axis="y", color="#E7E7E7", linewidth=0.65)
-    ax.set_axisbelow(True)
-    ax.legend(
+    for i, variant in enumerate(variants):
+        values = [max(primary_p99[(w, variant)], 1e-9) / rocks_p99[w] for w in workloads]
+        bars = axes[1].bar(
+            [x + (i - 2) * width for x in xs],
+            values,
+            width,
+            label=variant,
+            color=colors[i],
+            edgecolor="#222222",
+            linewidth=0.45,
+        )
+        for bar in bars:
+            bar.set_hatch(hatches[i])
+    axes[0].axhline(1.0, color="#666666", linewidth=0.8, linestyle="--")
+    axes[1].axhline(1.0, color="#666666", linewidth=0.8, linestyle="--")
+    axes[0].set_ylabel("Throughput\n(RocksDB=1)")
+    axes[1].set_ylabel("Primary p99\n(RocksDB=1)")
+    axes[1].set_yscale("log")
+    axes[1].set_ylim(0.45, 15)
+    axes[1].set_yticks([0.5, 1, 2, 5, 10])
+    axes[1].set_yticklabels(["0.5", "1", "2", "5", "10"])
+    axes[1].set_xticks(xs)
+    axes[1].set_xticklabels([f"YCSB-{w}" for w in workloads])
+    for ax in axes:
+        ax.grid(axis="y", color="#E7E7E7", linewidth=0.65)
+        ax.set_axisbelow(True)
+    axes[0].legend(
         loc="upper center",
-        bbox_to_anchor=(0.5, 1.32),
+        bbox_to_anchor=(0.5, 1.5),
         ncol=5,
         frameon=False,
         columnspacing=0.9,
