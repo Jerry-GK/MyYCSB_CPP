@@ -2,9 +2,11 @@
 //
 // The probe exercises the actual RBTreeLogicalOrderedRangeCache implementation
 // without opening RocksDB. It constructs one large logical range from many
-// physical segments, creates an interior hot island, then inserts new hot
-// ranges until eviction is required. The output is a compact CSV row per
-// victim policy.
+// physical segments, refreshes interior chunks, then inserts a new hot region
+// until eviction is required. The output is a compact CSV row per victim
+// policy. The downstream plot reports future scan consequences: the fraction
+// of scans that touch storage, the number of storage gaps, and an estimated
+// fixed-plus-record storage work.
 
 #include <rocksdb/cache.h>
 #include <rocksdb/rbtree_lorc.h>
@@ -123,6 +125,12 @@ struct Result {
   size_t new_hit_records;
   size_t new_cached_parts;
   size_t new_gap_parts;
+  size_t future_query_count;
+  size_t future_io_scan_count;
+  size_t future_query_records;
+  size_t future_hit_records;
+  size_t future_cached_parts;
+  size_t future_gap_parts;
   size_t current_size;
   size_t total_records;
 };
@@ -144,29 +152,62 @@ std::string ChunkBitmap(rocksdb::LogicalOrderedRangeCache* cache, uint64_t start
   return out;
 }
 
+struct Query {
+  uint64_t start = 0;
+  uint64_t len = 0;
+  size_t repeats = 1;
+};
+
+struct FutureWorkload {
+  size_t query_count = 0;
+  size_t io_scan_count = 0;
+  size_t query_records = 0;
+  size_t hit_records = 0;
+  size_t cached_parts = 0;
+  size_t gap_parts = 0;
+};
+
+FutureWorkload MeasureFutureWorkload(rocksdb::LogicalOrderedRangeCache* cache,
+                                     const std::vector<Query>& queries) {
+  FutureWorkload out;
+  for (const Query& q : queries) {
+    Coverage c = MeasureCoverage(cache, q.start, q.len);
+    out.query_count += q.repeats;
+    if (c.gap_parts > 0) {
+      out.io_scan_count += q.repeats;
+    }
+    out.query_records += q.len * q.repeats;
+    out.hit_records += c.hit_records * q.repeats;
+    out.cached_parts += c.cached_parts * q.repeats;
+    out.gap_parts += c.gap_parts * q.repeats;
+  }
+  return out;
+}
+
 Result RunPolicy(const std::string& policy) {
   constexpr uint64_t kChunkLen = 128;
   constexpr size_t kValueSize = 512;
   constexpr size_t kApproxRecordBytes = 548;
-  constexpr size_t kCapacity = kChunkLen * kApproxRecordBytes * 14;
+  constexpr size_t kCapacity = kChunkLen * kApproxRecordBytes * 15;
 
   auto cache = std::make_shared<rocksdb::RBTreeLogicalOrderedRangeCache>(
       kCapacity, rocksdb::LorcLogger::Level::DISABLE,
       rocksdb::PhysicalRangeType::CONTINUOUS, ParsePolicy(policy));
 
-  // Build one old contiguous logical range from 12 physical chunks.
-  for (uint64_t chunk = 0; chunk < 12; ++chunk) {
+  // Build one old contiguous logical range from 16 physical chunks.
+  for (uint64_t chunk = 0; chunk < 16; ++chunk) {
     AddChunk(cache.get(), chunk * kChunkLen, kChunkLen, kValueSize,
              chunk > 0, false);
     TrimToBudget(cache.get());
   }
 
-  // Make the middle of the old range hot while its surrounding interior remains
-  // stale. This is the pattern that exposes whether replacement preserves a
-  // useful logical island or creates many crossing holes.
+  // Refresh several interior chunks. A replacement policy that only follows
+  // physical recency tends to retain these islands while punching holes around
+  // them; Boundary-LRU must peel stale boundaries first.
   for (int round = 0; round < 40; ++round) {
-    cache->pinRange(Key(5 * kChunkLen));
-    cache->pinRange(Key(6 * kChunkLen));
+    cache->pinRange(Key(4 * kChunkLen));
+    cache->pinRange(Key(8 * kChunkLen));
+    cache->pinRange(Key(12 * kChunkLen));
   }
 
   // Insert a new, separate hot region. These chunks are recent and should not
@@ -177,11 +218,21 @@ Result RunPolicy(const std::string& policy) {
     TrimToBudget(cache.get());
   }
 
-  Coverage hot = MeasureCoverage(cache.get(), 5 * kChunkLen, 2 * kChunkLen);
-  Coverage crossing = MeasureCoverage(cache.get(), 0, 12 * kChunkLen);
-  Coverage newer = MeasureCoverage(cache.get(), 100000, 5 * kChunkLen);
+  Coverage hot = MeasureCoverage(cache.get(), 4 * kChunkLen, 9 * kChunkLen);
+  Coverage crossing = MeasureCoverage(cache.get(), 0, 16 * kChunkLen);
+  Coverage newer = MeasureCoverage(cache.get(), 100000, 6 * kChunkLen);
+  FutureWorkload future = MeasureFutureWorkload(
+      cache.get(),
+      {// Old-local scans around the still-reused interior of the original range.
+       {6 * kChunkLen, 4 * kChunkLen, 10},
+       {8 * kChunkLen, 4 * kChunkLen, 10},
+       {10 * kChunkLen, 3 * kChunkLen, 10},
+       // Crossing scans over the original logical range.
+       {0, 16 * kChunkLen, 5},
+       // New-region scans verify that a policy can still adapt.
+       {100000, 6 * kChunkLen, 5}});
   return Result{policy,
-                ChunkBitmap(cache.get(), 0, 12, kChunkLen),
+                ChunkBitmap(cache.get(), 0, 16, kChunkLen),
                 ChunkBitmap(cache.get(), 100000, 9, kChunkLen),
                 hot.hit_records,
                 hot.cached_parts,
@@ -192,6 +243,12 @@ Result RunPolicy(const std::string& policy) {
                 newer.hit_records,
                 newer.cached_parts,
                 newer.gap_parts,
+                future.query_count,
+                future.io_scan_count,
+                future.query_records,
+                future.hit_records,
+                future.cached_parts,
+                future.gap_parts,
                 cache->getCurrentSize(),
                 cache->getTotalRangeLength()};
 }
@@ -203,6 +260,9 @@ int main() {
                "hot_hit_records,hot_cached_parts,hot_gap_parts,"
                "crossing_hit_records,crossing_cached_parts,crossing_gap_parts,"
                "new_hit_records,new_cached_parts,new_gap_parts,"
+               "future_query_count,future_io_scan_count,"
+               "future_query_records,future_hit_records,"
+               "future_cached_parts,future_gap_parts,"
                "current_size,total_records\n";
   for (const std::string policy : {"boundary_lru", "physical_lru", "shortest_range"}) {
     Result r = RunPolicy(policy);
@@ -212,6 +272,9 @@ int main() {
               << r.crossing_hit_records << "," << r.crossing_cached_parts << ","
               << r.crossing_gap_parts << "," << r.new_hit_records << ","
               << r.new_cached_parts << "," << r.new_gap_parts << ","
+              << r.future_query_count << "," << r.future_io_scan_count << ","
+              << r.future_query_records << "," << r.future_hit_records << ","
+              << r.future_cached_parts << "," << r.future_gap_parts << ","
               << r.current_size << ","
               << r.total_records << "\n";
   }

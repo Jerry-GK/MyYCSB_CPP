@@ -8,7 +8,6 @@ import subprocess
 from pathlib import Path
 
 import matplotlib.pyplot as plt
-from matplotlib.colors import ListedColormap
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -52,14 +51,15 @@ def run() -> list[dict[str, str]]:
 def plot(rows: list[dict[str, str]]) -> None:
     plt.rcParams.update(
         {
-            "font.size": 9,
-            "axes.labelsize": 9,
+            "font.size": 8.5,
+            "axes.labelsize": 8.5,
             "legend.fontsize": 8,
             "xtick.labelsize": 8,
             "ytick.labelsize": 8,
             "figure.dpi": 180,
             "pdf.fonttype": 42,
             "ps.fonttype": 42,
+            "axes.linewidth": 0.8,
             "axes.spines.top": False,
             "axes.spines.right": False,
         }
@@ -67,36 +67,101 @@ def plot(rows: list[dict[str, str]]) -> None:
     labels = ["Boundary-LRU", "Physical LRU", "Shortest-range"]
     policy_order = ["boundary_lru", "physical_lru", "shortest_range"]
     by_policy = {r["policy"]: r for r in rows}
-    old_bitmap = [[1 if c == "1" else 0 for c in by_policy[p]["old_chunk_bitmap"]] for p in policy_order]
-    new_bitmap = [[1 if c == "1" else 0 for c in by_policy[p]["new_chunk_bitmap"]] for p in policy_order]
-    fig, axes = plt.subplots(1, 2, figsize=(7.2, 2.15), gridspec_kw={"width_ratios": [1.35, 1.0]})
-    cmap = ListedColormap(["#F2F2F2", "#4E79A7"])
+    colors = ["#4E79A7", "#E15759", "#59A14F"]
+    hatches = ["", "///", "..."]
 
-    axes[0].imshow(old_bitmap, aspect="auto", cmap=cmap, vmin=0, vmax=1)
-    axes[0].axvspan(4.5, 6.5, facecolor="#F28E2B", alpha=0.22, linewidth=0)
-    axes[0].set_title("Old range coverage")
-    axes[0].set_yticks(range(len(labels)))
-    axes[0].set_yticklabels(labels)
-    axes[0].set_xticks([0, 5, 11])
-    axes[0].set_xticklabels(["left", "hot", "right"])
-    axes[0].tick_params(axis="both", length=0)
-    for x in range(13):
-        axes[0].axvline(x - 0.5, color="white", linewidth=0.5)
-    for y in range(4):
-        axes[0].axhline(y - 0.5, color="white", linewidth=0.5)
+    fig, axes = plt.subplots(
+        1,
+        3,
+        figsize=(7.2, 2.15),
+        gridspec_kw={"width_ratios": [1.12, 1.0, 1.0]},
+    )
 
-    axes[1].imshow(new_bitmap, aspect="auto", cmap=cmap, vmin=0, vmax=1)
-    axes[1].set_title("New range coverage")
-    axes[1].set_yticks(range(len(labels)))
-    axes[1].set_yticklabels([])
-    axes[1].set_xticks([0, 4, 8])
-    axes[1].set_xticklabels(["start", "mid", "end"])
-    axes[1].tick_params(axis="both", length=0)
-    for x in range(10):
-        axes[1].axvline(x - 0.5, color="white", linewidth=0.5)
-    for y in range(4):
-        axes[1].axhline(y - 0.5, color="white", linewidth=0.5)
-    fig.tight_layout(w_pad=1.1)
+    io_scan_pct = [
+        100.0
+        * int(by_policy[p]["future_io_scan_count"])
+        / int(by_policy[p]["future_query_count"])
+        for p in policy_order
+    ]
+    gaps_per_k = [
+        100.0 * int(by_policy[p]["future_gap_parts"]) / int(by_policy[p]["future_query_count"])
+        for p in policy_order
+    ]
+    missed_per_scan = [
+        (
+            int(by_policy[p]["future_query_records"])
+            - int(by_policy[p]["future_hit_records"])
+        )
+        / int(by_policy[p]["future_query_count"])
+        for p in policy_order
+    ]
+    chunk_records = 128
+    storage_work_per_k = [
+        missed + chunk_records * (gaps / 100.0)
+        for missed, gaps in zip(missed_per_scan, gaps_per_k)
+    ]
+
+    panels = [
+        ("Scans touching\nstorage (%)", io_scan_pct, False),
+        ("Storage gaps\nper 100 scans", gaps_per_k, False),
+        ("Estimated storage work\nper scan", storage_work_per_k, False),
+    ]
+    for ax, (ylabel, values, higher_is_better) in zip(axes, panels):
+        bars = ax.bar(
+            range(len(policy_order)),
+            values,
+            color=colors,
+            edgecolor="#222222",
+            linewidth=0.45,
+        )
+        for bar, hatch in zip(bars, hatches):
+            bar.set_hatch(hatch)
+        for i, value in enumerate(values):
+            ax.text(
+                i,
+                value + max(values + [1]) * 0.045,
+                f"{value:.1f}",
+                ha="center",
+                va="bottom",
+                fontsize=7.3,
+            )
+        ax.set_ylabel(ylabel)
+        ax.set_xticks(range(len(policy_order)))
+        ax.set_xticklabels(["Boundary", "Physical", "Shortest"], rotation=18, ha="right")
+        ax.set_ylim(0, max(values + [1]) * 1.24)
+        ax.grid(axis="y", color="#E7E7E7", linewidth=0.65)
+        ax.set_axisbelow(True)
+
+    axes[0].text(
+        0.02,
+        0.95,
+        "main metric",
+        transform=axes[0].transAxes,
+        fontsize=7.3,
+        fontweight="bold",
+        color="#4E79A7",
+        va="top",
+    )
+    axes[1].text(
+        0.02,
+        0.95,
+        "gap cost",
+        transform=axes[1].transAxes,
+        fontsize=7.3,
+        va="top",
+        color="#555555",
+    )
+    axes[2].text(
+        0.02,
+        0.95,
+        "combined",
+        transform=axes[2].transAxes,
+        fontsize=7.3,
+        va="top",
+        color="#555555",
+    )
+
+    fig.tight_layout(w_pad=0.75)
     fig.savefig(FIG)
     plt.close(fig)
 
