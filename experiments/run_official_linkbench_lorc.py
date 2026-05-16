@@ -225,20 +225,6 @@ def run_logged(cmd: list[str], cwd: Path, log_path: Path) -> None:
     env["PATH"] = f"{JAVA_HOME / 'bin'}:{env.get('PATH', '')}"
     env["LINKBENCH_HOME"] = str(LINKBENCH_HOME)
     env["LD_LIBRARY_PATH"] = f"/home/gjr/mylibs/lorcdb_release/lib:{env.get('LD_LIBRARY_PATH', '')}"
-    rocksdb_lib = Path("/home/gjr/mylibs/lorcdb_release/lib/librocksdb.so")
-    jemalloc = Path("/lib/x86_64-linux-gnu/libjemalloc.so.2")
-    if rocksdb_lib.exists() and jemalloc.exists():
-        try:
-            needs_jemalloc = "libjemalloc" in subprocess.check_output(
-                ["ldd", str(rocksdb_lib)], text=True)
-        except subprocess.SubprocessError:
-            needs_jemalloc = False
-        if needs_jemalloc and "libjemalloc" not in env.get("LD_PRELOAD", ""):
-            existing_preload = env.get("LD_PRELOAD", "")
-            env["LD_PRELOAD"] = (
-                str(jemalloc) if not existing_preload
-                else f"{jemalloc}:{existing_preload}"
-            )
     with log_path.open("w", encoding="utf-8") as log:
         log.write("$ " + " ".join(shlex.quote(x) for x in cmd) + "\n")
         log.flush()
@@ -249,7 +235,6 @@ def run_logged(cmd: list[str], cwd: Path, log_path: Path) -> None:
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             text=True,
-            errors="replace",
             bufsize=1,
         )
         assert proc.stdout is not None
