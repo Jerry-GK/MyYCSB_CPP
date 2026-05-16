@@ -51,8 +51,8 @@ def run() -> list[dict[str, str]]:
 def plot(rows: list[dict[str, str]]) -> None:
     plt.rcParams.update(
         {
-            "font.size": 8.5,
-            "axes.labelsize": 8.5,
+            "font.size": 8.2,
+            "axes.labelsize": 8.2,
             "legend.fontsize": 8,
             "xtick.labelsize": 8,
             "ytick.labelsize": 8,
@@ -62,19 +62,20 @@ def plot(rows: list[dict[str, str]]) -> None:
             "axes.linewidth": 0.8,
             "axes.spines.top": False,
             "axes.spines.right": False,
+            "axes.spines.left": False,
         }
     )
     labels = ["Boundary-LRU", "Physical LRU", "Shortest-range"]
     policy_order = ["boundary_lru", "physical_lru", "shortest_range"]
     by_policy = {r["policy"]: r for r in rows}
-    colors = ["#4E79A7", "#E15759", "#59A14F"]
+    colors = ["#3B6EA8", "#C84E4E", "#5D9A55"]
     hatches = ["", "///", "..."]
 
     fig, axes = plt.subplots(
         1,
         3,
-        figsize=(7.2, 2.15),
-        gridspec_kw={"width_ratios": [1.12, 1.0, 1.0]},
+        figsize=(7.35, 2.05),
+        gridspec_kw={"width_ratios": [1.2, 1.05, 1.05]},
     )
 
     io_scan_pct = [
@@ -96,72 +97,59 @@ def plot(rows: list[dict[str, str]]) -> None:
         for p in policy_order
     ]
     chunk_records = 128
-    storage_work_per_k = [
+    storage_work_per_scan = [
         missed + chunk_records * (gaps / 100.0)
         for missed, gaps in zip(missed_per_scan, gaps_per_k)
     ]
+    relative_work = [v / storage_work_per_scan[0] for v in storage_work_per_scan]
 
     panels = [
-        ("Scans touching\nstorage (%)", io_scan_pct, False),
-        ("Storage gaps\nper 100 scans", gaps_per_k, False),
-        ("Estimated storage work\nper scan", storage_work_per_k, False),
+        ("Scans touching storage\n(lower is better)", io_scan_pct, "%"),
+        ("Storage-gap opens", gaps_per_k, "/100 scans"),
+        ("Storage-work proxy", relative_work, "x Boundary"),
     ]
-    for ax, (ylabel, values, higher_is_better) in zip(axes, panels):
-        bars = ax.bar(
-            range(len(policy_order)),
+    for ax, (title, values, unit) in zip(axes, panels):
+        y_pos = list(reversed(range(len(policy_order))))
+        bars = ax.barh(
+            y_pos,
             values,
             color=colors,
             edgecolor="#222222",
             linewidth=0.45,
+            height=0.56,
         )
         for bar, hatch in zip(bars, hatches):
             bar.set_hatch(hatch)
+        xmax = max(values + [1])
         for i, value in enumerate(values):
+            if unit == "%":
+                label = f"{value:.1f}%"
+            elif unit == "/100 scans":
+                label = f"{value:.1f}"
+            else:
+                label = f"{value:.2f}x"
             ax.text(
-                i,
-                value + max(values + [1]) * 0.045,
-                f"{value:.1f}",
-                ha="center",
-                va="bottom",
-                fontsize=7.3,
+                value + xmax * 0.035,
+                y_pos[i],
+                label,
+                ha="left",
+                va="center",
+                fontsize=7.2,
             )
-        ax.set_ylabel(ylabel)
-        ax.set_xticks(range(len(policy_order)))
-        ax.set_xticklabels(["Boundary", "Physical", "Shortest"], rotation=18, ha="right")
-        ax.set_ylim(0, max(values + [1]) * 1.24)
-        ax.grid(axis="y", color="#E7E7E7", linewidth=0.65)
+        ax.set_title(title, fontsize=8.4, pad=4)
+        ax.set_yticks(y_pos)
+        if ax is axes[0]:
+            ax.set_yticklabels(labels)
+        else:
+            ax.set_yticklabels([])
+        ax.set_xlim(0, xmax * 1.32)
+        ax.grid(axis="x", color="#E8E8E8", linewidth=0.65)
         ax.set_axisbelow(True)
+        ax.tick_params(axis="y", length=0)
+        ax.tick_params(axis="x", length=2, pad=1)
+        ax.set_xlabel(unit, labelpad=2)
 
-    axes[0].text(
-        0.02,
-        0.95,
-        "main metric",
-        transform=axes[0].transAxes,
-        fontsize=7.3,
-        fontweight="bold",
-        color="#4E79A7",
-        va="top",
-    )
-    axes[1].text(
-        0.02,
-        0.95,
-        "gap cost",
-        transform=axes[1].transAxes,
-        fontsize=7.3,
-        va="top",
-        color="#555555",
-    )
-    axes[2].text(
-        0.02,
-        0.95,
-        "combined",
-        transform=axes[2].transAxes,
-        fontsize=7.3,
-        va="top",
-        color="#555555",
-    )
-
-    fig.tight_layout(w_pad=0.75)
+    fig.tight_layout(w_pad=0.55)
     fig.savefig(FIG)
     plt.close(fig)
 
