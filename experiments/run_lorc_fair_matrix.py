@@ -9,6 +9,10 @@ The matrix enforces a single configured cache budget per system:
   BlobDB+LORC   : range cache = budget, block/blob cache = 0
   LSbM          : block cache = budget
 
+The KV-separation cache-mode suite additionally compares BlobDB native
+blob cache, BlobDB + index-only LORC + blob cache, and BlobDB + full-value
+LORC under the same configured cache budget.
+
 Every run is wrapped by /usr/bin/time -v and records max RSS. Read-only runs
 reuse source databases; workloads with foreground updates copy the source DB.
 """
@@ -130,6 +134,21 @@ VARIANTS = [
     Variant("LSbM", "lsbm", "lsbm", Path("lsbm/lsbm.properties")),
 ]
 
+BLOBDB_INDEX_LORC = Variant(
+    "BlobDB+IndexLORC",
+    "blobdb",
+    "rocksdb_lorc",
+    Path("rocksdb_lorc/blobdb_lorc.properties"),
+    lorc=True,
+    blobdb=True,
+)
+
+KVSEP_CACHE_VARIANTS = [
+    VARIANTS[2],
+    BLOBDB_INDEX_LORC,
+    VARIANTS[3],
+]
+
 
 METRIC_RE = re.compile(
     r"\[(?P<op>[A-Z-]+): Count=(?P<count>\d+) Max=(?P<max>[\d.]+) "
@@ -169,6 +188,11 @@ def system_props(variant: Variant, budget: int, *, direct_reads: str) -> dict[st
     elif variant.label == "BlobDB":
         block_cache = budget // 4
         blob_cache = budget - block_cache
+    elif variant.label == "BlobDB+IndexLORC":
+        range_cache = max(16 * MB, budget // 16)
+        range_cache = min(range_cache, budget // 4)
+        blob_cache = (budget * 3) // 4
+        block_cache = budget - blob_cache - range_cache
     elif variant.label == "BlobDB+LORC":
         range_cache = budget
     else:
@@ -185,6 +209,19 @@ def system_props(variant: Variant, budget: int, *, direct_reads: str) -> dict[st
         "rocksdb.range_cache_victim_policy": "boundary_lru",
         "rocksdb.lorc_enable_stats": "true" if variant.lorc else "false",
     }
+    if variant.label == "BlobDB+LORC":
+        props.update({
+            "rocksdb.lorc_value_separation_aware": "true",
+            "rocksdb.lorc_bypass_lower_cache_on_refill": "true",
+            "rocksdb.lorc_min_materialized_value_bytes": "512",
+        })
+    elif variant.label == "BlobDB+IndexLORC":
+        props.update({
+            "rocksdb.lorc_value_separation_aware": "true",
+            "rocksdb.lorc_bypass_lower_cache_on_refill": "false",
+            "rocksdb.lorc_index_only_on_refill": "true",
+            "rocksdb.lorc_min_materialized_value_bytes": "0",
+        })
     return props
 
 
@@ -599,6 +636,7 @@ def make_plan(
         min_warmup_ops: int = 20_000,
         coverage_factor: float = 20.0,
         timeout: int = 1200,
+        variants: list[Variant] | None = None,
     ) -> None:
         if suites is not None and suite not in suites:
             return
@@ -624,7 +662,8 @@ def make_plan(
             coverage_factor=coverage_factor,
         )
         read_only = update_prop == 0.0
-        for variant in VARIANTS:
+        suite_variants = variants if variants is not None else VARIANTS
+        for variant in suite_variants:
             plan.append(
                 {
                     "suite": suite,
@@ -703,6 +742,22 @@ def make_plan(
             min_warmup_ops=warmup_floor,
             coverage_factor=10.0,
             timeout=5400,
+        )
+
+    for scan_length in [50, 100, 200, 400]:
+        measured_floor = 8_000 if scan_length <= 100 else 5_000 if scan_length <= 200 else 3_000
+        add_suite(
+            suite="kvsep_cache_mode",
+            x_value=str(scan_length),
+            x_label=str(scan_length),
+            dataset=KVSEP_8KB_4GB_DATASET,
+            suite_measured_ops=max(measured_floor, measured_ops // 10),
+            scan_length=scan_length,
+            hot_ratio=0.20,
+            min_warmup_ops=40_000,
+            coverage_factor=20.0,
+            timeout=5400,
+            variants=KVSEP_CACHE_VARIANTS,
         )
 
     for cache_budget_mb in [16, 32, 64, 128]:
@@ -962,6 +1017,12 @@ SUMMARY_KEYS = [
     "lorc_materialized_value_bytes",
     "lorc_full_hit_rate",
     "lorc_hit_size_rate",
+    "lorc_value_separated_refill_ranges",
+    "lorc_value_separated_refill_entries",
+    "lorc_value_separated_refill_bytes",
+    "lorc_value_payload_demotion_ranges",
+    "lorc_value_payload_demotion_entries",
+    "lorc_value_payload_demotion_bytes",
     "rocksdb_block_data_hit",
     "rocksdb_block_data_miss",
     "rocksdb_block_bytes_read",
@@ -1055,10 +1116,11 @@ def aggregate_repeats(rows: list[dict]) -> list[dict]:
             "value_size": 1,
             "large_value_scan_length": 2,
             "kvsep_4gb_scan_length": 3,
-            "cache_budget": 4,
-            "workload": 5,
-            "warmup": 6,
-            "threads": 7,
+            "kvsep_cache_mode": 4,
+            "cache_budget": 5,
+            "workload": 6,
+            "warmup": 7,
+            "threads": 8,
         }
         return (
             suite_order.get(str(row.get("suite")), 99),
@@ -1101,6 +1163,7 @@ COLORS = {
     "RocksDB": "#4E79A7",
     "RocksDB+LORC": "#F28E2B",
     "BlobDB": "#59A14F",
+    "BlobDB+IndexLORC": "#B07AA1",
     "BlobDB+LORC": "#E15759",
     "LSbM": "#8A60B0",
 }
@@ -1108,14 +1171,23 @@ HATCHES = {
     "RocksDB": "",
     "RocksDB+LORC": "//",
     "BlobDB": "",
+    "BlobDB+IndexLORC": "..",
     "BlobDB+LORC": "//",
     "LSbM": "",
 }
-VARIANT_ORDER = [v.label for v in VARIANTS]
+VARIANT_ORDER = [
+    "RocksDB",
+    "RocksDB+LORC",
+    "BlobDB",
+    "BlobDB+IndexLORC",
+    "BlobDB+LORC",
+    "LSbM",
+]
 LINE_MARKERS = {
     "RocksDB": "o",
     "RocksDB+LORC": "s",
     "BlobDB": "^",
+    "BlobDB+IndexLORC": "v",
     "BlobDB+LORC": "D",
     "LSbM": "P",
 }
@@ -1123,6 +1195,7 @@ LINE_STYLES = {
     "RocksDB": "-",
     "RocksDB+LORC": "-",
     "BlobDB": "--",
+    "BlobDB+IndexLORC": "-.",
     "BlobDB+LORC": "--",
     "LSbM": ":",
 }
@@ -1669,6 +1742,13 @@ def make_figures(summary: Path, figure_dir: Path) -> None:
             rows,
             out_path=figure_dir / "eval_kvsep_4gb_scan_length.pdf",
         )
+    if "kvsep_cache_mode" in suites:
+        make_metric_line_row(
+            rows,
+            suite="kvsep_cache_mode",
+            out_path=figure_dir / "eval_kvsep_cache_mode.pdf",
+            title_prefix="KV-separated cache mode",
+        )
     if "workload" in suites:
         make_workload_figure(rows, figure_dir / "eval_fair_workload.pdf")
     if "cache_budget" in suites:
@@ -1718,7 +1798,7 @@ def write_anomaly_report(rows: list[dict], path: Path) -> None:
         by_suite_variant.setdefault((str(row.get("suite")), str(row.get("variant"))), []).append(row)
 
     for (suite, variant), series in by_suite_variant.items():
-        if suite not in {"scan_length", "large_value_scan_length", "kvsep_4gb_scan_length", "cache_budget", "threads", "warmup"}:
+        if suite not in {"scan_length", "large_value_scan_length", "kvsep_4gb_scan_length", "kvsep_cache_mode", "cache_budget", "threads", "warmup"}:
             continue
         ordered = sorted(series, key=lambda r: float(r.get("x_value", 0)))
         values = [row_value(r, "throughputops/sec") for r in ordered]

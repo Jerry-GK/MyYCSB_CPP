@@ -72,13 +72,25 @@ namespace {
   const std::string PROP_RANGE_CACHE_SIZE_DEFAULT = "0";
 
   const std::string PROP_RANGE_CACHE_PHYSICAL_TYPE = "rocksdb.range_cache_physical_type";
-  const std::string PROP_RANGE_CACHE_PHYSICAL_TYPE_DEFAULT = "vec";
+  const std::string PROP_RANGE_CACHE_PHYSICAL_TYPE_DEFAULT = "continuous";
 
   const std::string PROP_RANGE_CACHE_VICTIM_POLICY = "rocksdb.range_cache_victim_policy";
   const std::string PROP_RANGE_CACHE_VICTIM_POLICY_DEFAULT = "boundary_lru";
 
   const std::string PROP_LORC_ENABLE_STATS = "rocksdb.lorc_enable_stats";
   const std::string PROP_LORC_ENABLE_STATS_DEFAULT = "false";
+
+  const std::string PROP_LORC_VALUE_SEPARATION_AWARE = "rocksdb.lorc_value_separation_aware";
+  const std::string PROP_LORC_VALUE_SEPARATION_AWARE_DEFAULT = "false";
+
+  const std::string PROP_LORC_BYPASS_LOWER_CACHE_ON_REFILL = "rocksdb.lorc_bypass_lower_cache_on_refill";
+  const std::string PROP_LORC_BYPASS_LOWER_CACHE_ON_REFILL_DEFAULT = "false";
+
+  const std::string PROP_LORC_MIN_MATERIALIZED_VALUE_BYTES = "rocksdb.lorc_min_materialized_value_bytes";
+  const std::string PROP_LORC_MIN_MATERIALIZED_VALUE_BYTES_DEFAULT = "0";
+
+  const std::string PROP_LORC_INDEX_ONLY_ON_REFILL = "rocksdb.lorc_index_only_on_refill";
+  const std::string PROP_LORC_INDEX_ONLY_ON_REFILL_DEFAULT = "false";
 
   const std::string PROP_ENABLE_ROCKSDB_STATS = "rocksdb.enable_statistics";
   const std::string PROP_ENABLE_ROCKSDB_STATS_DEFAULT = "false";
@@ -325,6 +337,12 @@ void RocksdbDB::Cleanup() {
               << " avg_put_range_us=" << range_cache->getCacheStatistic().getAvgPutRangeTime()
               << " get_range_num=" << range_cache->getCacheStatistic().getGetRangeNum()
               << " avg_get_range_us=" << range_cache->getCacheStatistic().getAvgGetRangeTime()
+              << " value_separated_refill_ranges=" << range_cache->valueSeparatedRefillRanges()
+              << " value_separated_refill_entries=" << range_cache->valueSeparatedRefillEntries()
+              << " value_separated_refill_bytes=" << range_cache->valueSeparatedRefillBytes()
+              << " value_payload_demotion_ranges=" << range_cache->valuePayloadDemotionRanges()
+              << " value_payload_demotion_entries=" << range_cache->valuePayloadDemotionEntries()
+              << " value_payload_demotion_bytes=" << range_cache->valuePayloadDemotionBytes()
               << std::endl;
   }
   if (rocksdb_stats) {
@@ -475,6 +493,19 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
                             PROP_LORC_ENABLE_STATS_DEFAULT) == "true") {
         range_cache->setEnableStatistic(true);
       }
+      const bool value_sep_aware =
+          props.GetProperty(PROP_LORC_VALUE_SEPARATION_AWARE,
+                            PROP_LORC_VALUE_SEPARATION_AWARE_DEFAULT) == "true";
+      range_cache->setValueSeparationAware(value_sep_aware);
+      range_cache->setBypassLowerCacheOnRefill(
+          props.GetProperty(PROP_LORC_BYPASS_LOWER_CACHE_ON_REFILL,
+                            PROP_LORC_BYPASS_LOWER_CACHE_ON_REFILL_DEFAULT) == "true");
+      range_cache->setIndexOnlyOnRefill(
+          props.GetProperty(PROP_LORC_INDEX_ONLY_ON_REFILL,
+                            PROP_LORC_INDEX_ONLY_ON_REFILL_DEFAULT) == "true");
+      range_cache->setMinMaterializedValueBytes(
+          std::stoul(props.GetProperty(PROP_LORC_MIN_MATERIALIZED_VALUE_BYTES,
+                                       PROP_LORC_MIN_MATERIALIZED_VALUE_BYTES_DEFAULT)));
       opt->range_cache = range_cache;
     }
 
