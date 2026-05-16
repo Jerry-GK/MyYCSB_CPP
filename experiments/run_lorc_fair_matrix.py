@@ -72,7 +72,6 @@ class Variant:
     prop_file: Path
     lorc: bool = False
     blobdb: bool = False
-    extra_props: tuple[tuple[str, str], ...] = ()
 
     @property
     def key(self) -> str:
@@ -150,47 +149,6 @@ KVSEP_CACHE_VARIANTS = [
     VARIANTS[3],
 ]
 
-SHORT_EXPANSION_VARIANTS = [
-    VARIANTS[0],
-    Variant(
-        "LORC-singleton",
-        "rocksdb",
-        "rocksdb_lorc",
-        Path("rocksdb_lorc/rocksdb_lorc.properties"),
-        lorc=True,
-        extra_props=(
-            ("rocksdb.lorc_min_materialized_range_entries", "1"),
-            ("rocksdb.lorc_short_range_expansion_entries", "0"),
-            ("rocksdb.lorc_short_range_probe_admission", "false"),
-        ),
-    ),
-    Variant(
-        "LORC-guarded",
-        "rocksdb",
-        "rocksdb_lorc",
-        Path("rocksdb_lorc/rocksdb_lorc.properties"),
-        lorc=True,
-        extra_props=(
-            ("rocksdb.lorc_min_materialized_range_entries", "4"),
-            ("rocksdb.lorc_short_range_expansion_entries", "0"),
-            ("rocksdb.lorc_short_range_probe_admission", "false"),
-        ),
-    ),
-    Variant(
-        "LORC-expanded",
-        "rocksdb",
-        "rocksdb_lorc",
-        Path("rocksdb_lorc/rocksdb_lorc.properties"),
-        lorc=True,
-        extra_props=(
-            ("rocksdb.lorc_min_materialized_range_entries", "4"),
-            ("rocksdb.lorc_short_range_expansion_entries", "32"),
-            ("rocksdb.lorc_short_range_probe_admission", "true"),
-            ("rocksdb.lorc_short_range_probe_capacity", "4096"),
-        ),
-    ),
-]
-
 
 METRIC_RE = re.compile(
     r"\[(?P<op>[A-Z-]+): Count=(?P<count>\d+) Max=(?P<max>[\d.]+) "
@@ -237,8 +195,6 @@ def system_props(variant: Variant, budget: int, *, direct_reads: str) -> dict[st
         block_cache = budget - blob_cache - range_cache
     elif variant.label == "BlobDB+LORC":
         range_cache = budget
-    elif variant.label.startswith("LORC-"):
-        range_cache = budget
     else:
         raise ValueError(f"Unknown variant: {variant.label}")
 
@@ -266,8 +222,6 @@ def system_props(variant: Variant, budget: int, *, direct_reads: str) -> dict[st
             "rocksdb.lorc_index_only_on_refill": "true",
             "rocksdb.lorc_min_materialized_value_bytes": "0",
         })
-    if variant.extra_props:
-        props.update(dict(variant.extra_props))
     return props
 
 
@@ -822,22 +776,6 @@ def make_plan(
             timeout=2400,
         )
 
-    for scan_length in [1, 2, 4, 8, 16]:
-        add_suite(
-            suite="short_expansion",
-            x_value=str(scan_length),
-            x_label=str(scan_length),
-            dataset=CACHE_PRESSURE_DATASET,
-            suite_budget=min(budget, 256 * MB),
-            suite_measured_ops=max(30_000, measured_ops // 5),
-            scan_length=scan_length,
-            hot_ratio=0.02,
-            min_warmup_ops=30_000,
-            coverage_factor=15.0,
-            timeout=1200,
-            variants=SHORT_EXPANSION_VARIANTS,
-        )
-
     workload_cases = [
         ("scan100", "100% scan", 0.0, 0.0, 1.0),
         ("scan50_read50", "50/50", 0.5, 0.0, 0.5),
@@ -1074,8 +1012,6 @@ SUMMARY_KEYS = [
     "lorc_current_size",
     "lorc_capacity",
     "lorc_total_range_length",
-    "lorc_logical_range_count",
-    "lorc_physical_range_count",
     "lorc_materialized_entries",
     "lorc_materialized_key_bytes",
     "lorc_materialized_value_bytes",
@@ -1087,13 +1023,6 @@ SUMMARY_KEYS = [
     "lorc_value_payload_demotion_ranges",
     "lorc_value_payload_demotion_entries",
     "lorc_value_payload_demotion_bytes",
-    "lorc_short_expansion_candidates",
-    "lorc_short_expansion_admitted",
-    "lorc_short_expansion_filtered",
-    "lorc_short_expansion_extra_entries",
-    "lorc_foreground_invalidations",
-    "lorc_foreground_invalidation_removed_ranges",
-    "lorc_write_churn_bypass_count",
     "rocksdb_block_data_hit",
     "rocksdb_block_data_miss",
     "rocksdb_block_bytes_read",
@@ -1237,9 +1166,6 @@ COLORS = {
     "BlobDB+IndexLORC": "#B07AA1",
     "BlobDB+LORC": "#E15759",
     "LSbM": "#8A60B0",
-    "LORC-singleton": "#9C755F",
-    "LORC-guarded": "#B07AA1",
-    "LORC-expanded": "#F28E2B",
 }
 HATCHES = {
     "RocksDB": "",
@@ -1248,9 +1174,6 @@ HATCHES = {
     "BlobDB+IndexLORC": "..",
     "BlobDB+LORC": "//",
     "LSbM": "",
-    "LORC-singleton": "..",
-    "LORC-guarded": "\\\\",
-    "LORC-expanded": "//",
 }
 VARIANT_ORDER = [
     "RocksDB",
@@ -1259,9 +1182,6 @@ VARIANT_ORDER = [
     "BlobDB+IndexLORC",
     "BlobDB+LORC",
     "LSbM",
-    "LORC-singleton",
-    "LORC-guarded",
-    "LORC-expanded",
 ]
 LINE_MARKERS = {
     "RocksDB": "o",
@@ -1270,9 +1190,6 @@ LINE_MARKERS = {
     "BlobDB+IndexLORC": "v",
     "BlobDB+LORC": "D",
     "LSbM": "P",
-    "LORC-singleton": "X",
-    "LORC-guarded": "v",
-    "LORC-expanded": "s",
 }
 LINE_STYLES = {
     "RocksDB": "-",
@@ -1281,9 +1198,6 @@ LINE_STYLES = {
     "BlobDB+IndexLORC": "-.",
     "BlobDB+LORC": "--",
     "LSbM": ":",
-    "LORC-singleton": ":",
-    "LORC-guarded": "--",
-    "LORC-expanded": "-",
 }
 
 
@@ -1843,13 +1757,6 @@ def make_figures(summary: Path, figure_dir: Path) -> None:
             suite="cache_budget",
             out_path=figure_dir / "eval_cache_budget.pdf",
             title_prefix="cache budget",
-        )
-    if "short_expansion" in suites:
-        make_metric_line_row(
-            rows,
-            suite="short_expansion",
-            out_path=figure_dir / "eval_short_expansion.pdf",
-            title_prefix="short scan expansion",
         )
     if "warmup" in suites:
         make_grouped_metric_figure(

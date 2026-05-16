@@ -67,20 +67,10 @@ public class LinkStoreLorcKV extends GraphStore {
       "lorckv.index_only_on_refill";
   private static final String PROP_MIN_MATERIALIZED_VALUE_BYTES =
       "lorckv.min_materialized_value_bytes";
-  private static final String PROP_MIN_MATERIALIZED_RANGE_ENTRIES =
-      "lorckv.min_materialized_range_entries";
-  private static final String PROP_MIN_MATERIALIZED_RANGE_BYTES =
-      "lorckv.min_materialized_range_bytes";
   private static final String PROP_MAX_MATERIALIZED_RANGE_ENTRIES =
       "lorckv.max_materialized_range_entries";
   private static final String PROP_MAX_MATERIALIZED_RANGE_BYTES =
       "lorckv.max_materialized_range_bytes";
-  private static final String PROP_SHORT_RANGE_EXPANSION_ENTRIES =
-      "lorckv.short_range_expansion_entries";
-  private static final String PROP_SHORT_RANGE_PROBE_ADMISSION =
-      "lorckv.short_range_probe_admission";
-  private static final String PROP_SHORT_RANGE_PROBE_CAPACITY =
-      "lorckv.short_range_probe_capacity";
   private static final String PROP_DISABLE_AUTO_COMPACTIONS =
       "lorckv.disable_auto_compactions";
   private static final String PROP_ENABLE_STATISTICS = "lorckv.enable_statistics";
@@ -145,13 +135,8 @@ public class LinkStoreLorcKV extends GraphStore {
             getBoolean(p, PROP_BYPASS_LOWER_CACHE_ON_REFILL, false),
             getBoolean(p, PROP_INDEX_ONLY_ON_REFILL, false),
             getLong(p, PROP_MIN_MATERIALIZED_VALUE_BYTES, 0L),
-            getLong(p, PROP_MIN_MATERIALIZED_RANGE_ENTRIES, 4L),
-            getLong(p, PROP_MIN_MATERIALIZED_RANGE_BYTES, 0L),
             getLong(p, PROP_MAX_MATERIALIZED_RANGE_ENTRIES, 0L),
             getLong(p, PROP_MAX_MATERIALIZED_RANGE_BYTES, 0L),
-            getLong(p, PROP_SHORT_RANGE_EXPANSION_ENTRIES, 32L),
-            getBoolean(p, PROP_SHORT_RANGE_PROBE_ADMISSION, true),
-            getLong(p, PROP_SHORT_RANGE_PROBE_CAPACITY, 4096L),
             getBoolean(p, PROP_DISABLE_AUTO_COMPACTIONS, false),
             getBoolean(p, PROP_ENABLE_STATISTICS, false));
         openDbPath = dbPath;
@@ -614,11 +599,9 @@ public class LinkStoreLorcKV extends GraphStore {
       long blobFileSize, long blockCacheSize, long blobCacheSize,
       long rangeCacheSize, boolean valueSeparationAware,
       boolean bypassLowerCacheOnRefill, boolean indexOnlyOnRefill,
-      long minMaterializedValueBytes, long minMaterializedRangeEntries,
-      long minMaterializedRangeBytes, long maxMaterializedRangeEntries,
-      long maxMaterializedRangeBytes, long shortRangeExpansionEntries,
-      boolean shortRangeProbeAdmission, long shortRangeProbeCapacity,
-      boolean disableAutoCompactions, boolean enableStatistics);
+      long minMaterializedValueBytes, long maxMaterializedRangeEntries,
+      long maxMaterializedRangeBytes, boolean disableAutoCompactions,
+      boolean enableStatistics);
 
   private static native void nativeClose(long handle);
 

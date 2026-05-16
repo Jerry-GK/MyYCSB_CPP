@@ -89,27 +89,6 @@ namespace {
   const std::string PROP_LORC_MIN_MATERIALIZED_VALUE_BYTES = "rocksdb.lorc_min_materialized_value_bytes";
   const std::string PROP_LORC_MIN_MATERIALIZED_VALUE_BYTES_DEFAULT = "0";
 
-  const std::string PROP_LORC_MIN_MATERIALIZED_RANGE_ENTRIES = "rocksdb.lorc_min_materialized_range_entries";
-  const std::string PROP_LORC_MIN_MATERIALIZED_RANGE_ENTRIES_DEFAULT = "4";
-
-  const std::string PROP_LORC_MIN_MATERIALIZED_RANGE_BYTES = "rocksdb.lorc_min_materialized_range_bytes";
-  const std::string PROP_LORC_MIN_MATERIALIZED_RANGE_BYTES_DEFAULT = "0";
-
-  const std::string PROP_LORC_MAX_MATERIALIZED_RANGE_ENTRIES = "rocksdb.lorc_max_materialized_range_entries";
-  const std::string PROP_LORC_MAX_MATERIALIZED_RANGE_ENTRIES_DEFAULT = "0";
-
-  const std::string PROP_LORC_MAX_MATERIALIZED_RANGE_BYTES = "rocksdb.lorc_max_materialized_range_bytes";
-  const std::string PROP_LORC_MAX_MATERIALIZED_RANGE_BYTES_DEFAULT = "0";
-
-  const std::string PROP_LORC_SHORT_RANGE_EXPANSION_ENTRIES = "rocksdb.lorc_short_range_expansion_entries";
-  const std::string PROP_LORC_SHORT_RANGE_EXPANSION_ENTRIES_DEFAULT = "32";
-
-  const std::string PROP_LORC_SHORT_RANGE_PROBE_ADMISSION = "rocksdb.lorc_short_range_probe_admission";
-  const std::string PROP_LORC_SHORT_RANGE_PROBE_ADMISSION_DEFAULT = "true";
-
-  const std::string PROP_LORC_SHORT_RANGE_PROBE_CAPACITY = "rocksdb.lorc_short_range_probe_capacity";
-  const std::string PROP_LORC_SHORT_RANGE_PROBE_CAPACITY_DEFAULT = "4096";
-
   const std::string PROP_LORC_INDEX_ONLY_ON_REFILL = "rocksdb.lorc_index_only_on_refill";
   const std::string PROP_LORC_INDEX_ONLY_ON_REFILL_DEFAULT = "false";
 
@@ -349,8 +328,6 @@ void RocksdbDB::Cleanup() {
               << " current_size=" << range_cache->getCurrentSize()
               << " capacity=" << range_cache->getCapacity()
               << " total_range_length=" << range_cache->getTotalRangeLength()
-              << " logical_range_count=" << range_cache->logicalRangeCount()
-              << " physical_range_count=" << range_cache->physicalRangeCount()
               << " materialized_entries=" << range_cache->totalMaterializedEntries()
               << " materialized_key_bytes=" << range_cache->totalMaterializedKeyBytes()
               << " materialized_value_bytes=" << range_cache->totalMaterializedValueBytes()
@@ -366,13 +343,6 @@ void RocksdbDB::Cleanup() {
               << " value_payload_demotion_ranges=" << range_cache->valuePayloadDemotionRanges()
               << " value_payload_demotion_entries=" << range_cache->valuePayloadDemotionEntries()
               << " value_payload_demotion_bytes=" << range_cache->valuePayloadDemotionBytes()
-              << " short_expansion_candidates=" << range_cache->shortRangeExpansionCandidates()
-              << " short_expansion_admitted=" << range_cache->shortRangeExpansionAdmitted()
-              << " short_expansion_filtered=" << range_cache->shortRangeExpansionFiltered()
-              << " short_expansion_extra_entries=" << range_cache->shortRangeExpansionExtraEntries()
-              << " foreground_invalidations=" << range_cache->foregroundInvalidations()
-              << " foreground_invalidation_removed_ranges=" << range_cache->foregroundInvalidationRemovedRanges()
-              << " write_churn_bypass_count=" << range_cache->writeChurnBypassCount()
               << std::endl;
   }
   if (rocksdb_stats) {
@@ -536,27 +506,6 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
       range_cache->setMinMaterializedValueBytes(
           std::stoul(props.GetProperty(PROP_LORC_MIN_MATERIALIZED_VALUE_BYTES,
                                        PROP_LORC_MIN_MATERIALIZED_VALUE_BYTES_DEFAULT)));
-      range_cache->setMinMaterializedRangeEntries(
-          std::stoul(props.GetProperty(PROP_LORC_MIN_MATERIALIZED_RANGE_ENTRIES,
-                                       PROP_LORC_MIN_MATERIALIZED_RANGE_ENTRIES_DEFAULT)));
-      range_cache->setMinMaterializedRangeBytes(
-          std::stoul(props.GetProperty(PROP_LORC_MIN_MATERIALIZED_RANGE_BYTES,
-                                       PROP_LORC_MIN_MATERIALIZED_RANGE_BYTES_DEFAULT)));
-      range_cache->setMaxMaterializedRangeEntries(
-          std::stoul(props.GetProperty(PROP_LORC_MAX_MATERIALIZED_RANGE_ENTRIES,
-                                       PROP_LORC_MAX_MATERIALIZED_RANGE_ENTRIES_DEFAULT)));
-      range_cache->setMaxMaterializedRangeBytes(
-          std::stoul(props.GetProperty(PROP_LORC_MAX_MATERIALIZED_RANGE_BYTES,
-                                       PROP_LORC_MAX_MATERIALIZED_RANGE_BYTES_DEFAULT)));
-      range_cache->setShortRangeExpansionEntries(
-          std::stoul(props.GetProperty(PROP_LORC_SHORT_RANGE_EXPANSION_ENTRIES,
-                                       PROP_LORC_SHORT_RANGE_EXPANSION_ENTRIES_DEFAULT)));
-      range_cache->setShortRangeProbeAdmission(
-          props.GetProperty(PROP_LORC_SHORT_RANGE_PROBE_ADMISSION,
-                            PROP_LORC_SHORT_RANGE_PROBE_ADMISSION_DEFAULT) == "true");
-      range_cache->setShortRangeProbeCapacity(
-          std::stoul(props.GetProperty(PROP_LORC_SHORT_RANGE_PROBE_CAPACITY,
-                                       PROP_LORC_SHORT_RANGE_PROBE_CAPACITY_DEFAULT)));
       opt->range_cache = range_cache;
     }
 

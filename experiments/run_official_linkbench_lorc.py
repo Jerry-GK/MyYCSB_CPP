@@ -36,11 +36,7 @@ if not has_javac:
 GiB = 1024 * 1024 * 1024
 MiB = 1024 * 1024
 LINKSTORE_DEFAULT_RANGE_LIMIT = 10000
-LINKBENCH_LORC_MIN_ADMITTED_ENTRIES = 4
 LINKBENCH_LORC_MAX_ADMITTED_ENTRIES = 512
-LINKBENCH_LORC_SHORT_RANGE_EXPANSION_ENTRIES = 32
-LINKBENCH_LORC_SHORT_RANGE_PROBE_CAPACITY = 4096
-LINKBENCH_LORC_RANGE_CACHE_BYTES = 64 * MiB
 
 
 VARIANTS = {
@@ -54,11 +50,7 @@ VARIANTS = {
         "lorckv.value_separation_aware": "false",
         "lorckv.index_only_on_refill": "false",
         "lorckv.bypass_lower_cache_on_refill": "false",
-        "lorckv.min_materialized_range_entries": str(LINKBENCH_LORC_MIN_ADMITTED_ENTRIES),
         "lorckv.max_materialized_range_entries": str(LINKBENCH_LORC_MAX_ADMITTED_ENTRIES),
-        "lorckv.short_range_expansion_entries": str(LINKBENCH_LORC_SHORT_RANGE_EXPANSION_ENTRIES),
-        "lorckv.short_range_probe_admission": "true",
-        "lorckv.short_range_probe_capacity": str(LINKBENCH_LORC_SHORT_RANGE_PROBE_CAPACITY),
     },
     "BlobDB": {
         "lorckv.engine": "rocksdb",
@@ -75,9 +67,9 @@ VARIANTS = {
         "lorckv.engine": "rocksdb",
         "lorckv.enable_blob_files": "false",
         "lorckv.min_blob_size": "512",
-        "lorckv.block_cache_size": str(1 * GiB - LINKBENCH_LORC_RANGE_CACHE_BYTES),
+        "lorckv.block_cache_size": str(512 * MiB),
         "lorckv.blob_cache_size": "0",
-        "lorckv.range_cache_size": str(LINKBENCH_LORC_RANGE_CACHE_BYTES),
+        "lorckv.range_cache_size": str(512 * MiB),
         "lorckv.value_separation_aware": "false",
         "lorckv.index_only_on_refill": "false",
         "lorckv.bypass_lower_cache_on_refill": "false",
@@ -86,33 +78,25 @@ VARIANTS = {
         "lorckv.engine": "rocksdb",
         "lorckv.enable_blob_files": "true",
         "lorckv.min_blob_size": "1",
-        "lorckv.block_cache_size": str(256 * MiB),
-        "lorckv.blob_cache_size": str(768 * MiB - LINKBENCH_LORC_RANGE_CACHE_BYTES),
-        "lorckv.range_cache_size": str(LINKBENCH_LORC_RANGE_CACHE_BYTES),
+        "lorckv.block_cache_size": str(192 * MiB),
+        "lorckv.blob_cache_size": str(768 * MiB),
+        "lorckv.range_cache_size": str(64 * MiB),
         "lorckv.value_separation_aware": "true",
         "lorckv.index_only_on_refill": "true",
         "lorckv.bypass_lower_cache_on_refill": "false",
-        "lorckv.min_materialized_range_entries": str(LINKBENCH_LORC_MIN_ADMITTED_ENTRIES),
         "lorckv.max_materialized_range_entries": str(LINKBENCH_LORC_MAX_ADMITTED_ENTRIES),
-        "lorckv.short_range_expansion_entries": str(LINKBENCH_LORC_SHORT_RANGE_EXPANSION_ENTRIES),
-        "lorckv.short_range_probe_admission": "true",
-        "lorckv.short_range_probe_capacity": str(LINKBENCH_LORC_SHORT_RANGE_PROBE_CAPACITY),
     },
     "BlobDB+LORC": {
         "lorckv.engine": "rocksdb",
         "lorckv.enable_blob_files": "true",
         "lorckv.min_blob_size": "1",
         "lorckv.block_cache_size": str(256 * MiB),
-        "lorckv.blob_cache_size": str(768 * MiB - LINKBENCH_LORC_RANGE_CACHE_BYTES),
-        "lorckv.range_cache_size": str(LINKBENCH_LORC_RANGE_CACHE_BYTES),
+        "lorckv.blob_cache_size": str(256 * MiB),
+        "lorckv.range_cache_size": str(512 * MiB),
         "lorckv.value_separation_aware": "true",
         "lorckv.index_only_on_refill": "false",
         "lorckv.bypass_lower_cache_on_refill": "false",
-        "lorckv.min_materialized_range_entries": str(LINKBENCH_LORC_MIN_ADMITTED_ENTRIES),
         "lorckv.max_materialized_range_entries": str(LINKBENCH_LORC_MAX_ADMITTED_ENTRIES),
-        "lorckv.short_range_expansion_entries": str(LINKBENCH_LORC_SHORT_RANGE_EXPANSION_ENTRIES),
-        "lorckv.short_range_probe_admission": "true",
-        "lorckv.short_range_probe_capacity": str(LINKBENCH_LORC_SHORT_RANGE_PROBE_CAPACITY),
     },
     "LSbM": {
         "lorckv.engine": "lsbm",
@@ -335,41 +319,12 @@ def main() -> None:
     parser.add_argument("--warmup-requests", type=int, default=None)
     parser.add_argument("--warmup-min-requests", type=int, default=80000)
     parser.add_argument(
-        "--lorc-min-admitted-entries",
-        type=int,
-        default=LINKBENCH_LORC_MIN_ADMITTED_ENTRIES,
-        help="Minimum returned entries admitted as one LORC segment. This "
-             "keeps singleton/list probes on the native path instead of "
-             "turning them into range-cache objects.",
-    )
-    parser.add_argument(
         "--lorc-max-admitted-entries",
         type=int,
         default=LINKBENCH_LORC_MAX_ADMITTED_ENTRIES,
         help="Maximum returned entries admitted as one LORC segment in the "
              "official mixed LinkBench run. This is an admission guardrail for "
              "high-fanout lists, not a workload generator change.",
-    )
-    parser.add_argument(
-        "--lorc-short-range-expansion-entries",
-        type=int,
-        default=LINKBENCH_LORC_SHORT_RANGE_EXPANSION_ENTRIES,
-        help="Bounded right-neighborhood entries materialized for short range "
-             "misses. Extra entries are cached but not returned to LinkBench.",
-    )
-    parser.add_argument(
-        "--lorc-short-range-probe-admission",
-        action=argparse.BooleanOptionalAction,
-        default=True,
-        help="Use two-touch admission for expanded short-range candidates so "
-             "one-off point/list probes do not become cache segments.",
-    )
-    parser.add_argument(
-        "--lorc-short-range-probe-capacity",
-        type=int,
-        default=LINKBENCH_LORC_SHORT_RANGE_PROBE_CAPACITY,
-        help="Number of recent expanded short-range probe windows retained for "
-             "two-touch admission.",
     )
     parser.add_argument("--load-random-seed", type=int, default=20260516)
     parser.add_argument("--warmup-random-seed", type=int, default=20260517)
@@ -465,16 +420,8 @@ def main() -> None:
       }
       common.update(VARIANTS[variant])
       if int(common.get("lorckv.range_cache_size", "0")) > 0:
-          common["lorckv.min_materialized_range_entries"] = str(
-              args.lorc_min_admitted_entries)
           common["lorckv.max_materialized_range_entries"] = str(
               args.lorc_max_admitted_entries)
-          common["lorckv.short_range_expansion_entries"] = str(
-              args.lorc_short_range_expansion_entries)
-          common["lorckv.short_range_probe_admission"] = (
-              "true" if args.lorc_short_range_probe_admission else "false")
-          common["lorckv.short_range_probe_capacity"] = str(
-              args.lorc_short_range_probe_capacity)
 
       marker = db_path / "LINKBENCH_LOAD_DONE"
       if not args.reuse_load or not marker.exists():
@@ -488,14 +435,28 @@ def main() -> None:
           )
           marker.touch()
 
+      if not args.time_based_warmup and fixed_warmup_requests > 0:
+          warm_props = dict(common)
+          warm_props["lorckv.destroy"] = "false"
+          warm_props["lorckv.create_if_missing"] = "false"
+          warm_props["request_random_seed"] = str(args.warmup_random_seed)
+          warm_props["requests"] = str(fixed_warmup_requests)
+          warm_props["warmup_time"] = "0"
+          warm_props["req_progress_interval"] = str(
+              max(10000, fixed_warmup_requests // 4))
+          run_logged(
+              java_cmd(warm_props, load=False, request=True,
+                       csvstats=out / f"{safe}_warmup.csv"),
+              LINKBENCH_HOME,
+              out / f"{safe}_warmup.log",
+          )
+
       req_props = dict(common)
       req_props["lorckv.destroy"] = "false"
       req_props["lorckv.create_if_missing"] = "false"
       req_props["request_random_seed"] = str(args.request_random_seed)
       req_props["requests"] = str(args.requests)
       req_props["warmup_time"] = str(warmup_time)
-      req_props["warmup_requests"] = (
-          "0" if args.time_based_warmup else str(fixed_warmup_requests))
       run_logged(
           java_cmd(req_props, load=False, request=True, csvstats=out / f"{safe}_request.csv"),
           LINKBENCH_HOME,
