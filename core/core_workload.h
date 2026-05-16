@@ -186,6 +186,13 @@ class CoreWorkload {
   static const std::string WARMUP_RATIO_DEFAULT;
 
   ///
+  /// Warmup operation type. Default preserves the previous scan-only warmup
+  /// behavior. Accepted values: "scan", "read", and "same".
+  ///
+  static const std::string WARMUP_OPERATION_PROPERTY;
+  static const std::string WARMUP_OPERATION_DEFAULT;
+
+  ///
   /// Initialize the scenario.
   /// Called once, in the main client thread, before any operations are started.
   ///

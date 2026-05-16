@@ -109,6 +109,8 @@ const string CoreWorkload::HOT_DATA_RATIO_DEFAULT = "1.0";
 
 const string CoreWorkload::WARMUP_RATIO_PROPERTY = "warmup_ratio";
 const string CoreWorkload::WARMUP_RATIO_DEFAULT = "0.0";
+const string CoreWorkload::WARMUP_OPERATION_PROPERTY = "warmupoperation";
+const string CoreWorkload::WARMUP_OPERATION_DEFAULT = "scan";
 
 namespace ycsbc {
 
@@ -188,9 +190,31 @@ void CoreWorkload::Init(const utils::Properties &p) {
     op_chooser_.AddValue(READMODIFYWRITE, readmodifywrite_proportion);
   }
 
-  // Initialize warmup operation chooser with only SCAN operations
-  if (scan_proportion > 0) {
+  const std::string warmup_operation =
+      p.GetProperty(WARMUP_OPERATION_PROPERTY, WARMUP_OPERATION_DEFAULT);
+  if (warmup_operation == "same") {
+    if (read_proportion > 0) {
+      warmup_op_chooser_.AddValue(READ, read_proportion);
+    }
+    if (update_proportion > 0) {
+      warmup_op_chooser_.AddValue(UPDATE, update_proportion);
+    }
+    if (insert_proportion > 0) {
+      warmup_op_chooser_.AddValue(INSERT, insert_proportion);
+    }
+    if (scan_proportion > 0) {
+      warmup_op_chooser_.AddValue(SCAN, scan_proportion);
+    }
+    if (readmodifywrite_proportion > 0) {
+      warmup_op_chooser_.AddValue(READMODIFYWRITE,
+                                  readmodifywrite_proportion);
+    }
+  } else if (warmup_operation == "read") {
+    warmup_op_chooser_.AddValue(READ, 1.0);
+  } else if (warmup_operation == "scan") {
     warmup_op_chooser_.AddValue(SCAN, 1.0);
+  } else {
+    throw utils::Exception("Unknown warmup operation: " + warmup_operation);
   }
 
   if (random_inserts_) {
@@ -369,8 +393,16 @@ bool CoreWorkload::DoTransaction(DB &db) {
 bool CoreWorkload::DoTransaction(DB &db, bool is_warmup, int op_num) {
   DB::Status status;
   if (is_warmup) {
-    // During warmup, only perform SCAN operations
     switch (warmup_op_chooser_.Next()) {
+      case READ:
+        status = TransactionRead(db);
+        break;
+      case UPDATE:
+        status = TransactionUpdate(db);
+        break;
+      case INSERT:
+        status = TransactionInsert(db);
+        break;
       case SCAN:
         if (op_num == 1 || op_num == 2) {
           status = TransactionScanWarmupBoundary(db, op_num);
@@ -378,9 +410,11 @@ bool CoreWorkload::DoTransaction(DB &db, bool is_warmup, int op_num) {
           status = TransactionScan(db);
         }
         break;
-      default:
+      case READMODIFYWRITE:
+        status = TransactionReadModifyWrite(db);
         break;
-        // throw utils::Exception("Warmup operation request is not recognized!");
+      default:
+        throw utils::Exception("Warmup operation request is not recognized!");
     }
   } else {
     // Normal operation mode

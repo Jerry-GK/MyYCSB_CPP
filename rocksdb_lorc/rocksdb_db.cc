@@ -92,6 +92,9 @@ namespace {
   const std::string PROP_LORC_INDEX_ONLY_ON_REFILL = "rocksdb.lorc_index_only_on_refill";
   const std::string PROP_LORC_INDEX_ONLY_ON_REFILL_DEFAULT = "false";
 
+  const std::string PROP_LORC_POINT_EXPANSION_ENTRIES = "rocksdb.lorc_point_expansion_entries";
+  const std::string PROP_LORC_POINT_EXPANSION_ENTRIES_DEFAULT = "0";
+
   const std::string PROP_ENABLE_ROCKSDB_STATS = "rocksdb.enable_statistics";
   const std::string PROP_ENABLE_ROCKSDB_STATS_DEFAULT = "false";
 
@@ -506,6 +509,9 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
       range_cache->setMinMaterializedValueBytes(
           std::stoul(props.GetProperty(PROP_LORC_MIN_MATERIALIZED_VALUE_BYTES,
                                        PROP_LORC_MIN_MATERIALIZED_VALUE_BYTES_DEFAULT)));
+      range_cache->setPointExpansionEntries(
+          std::stoul(props.GetProperty(PROP_LORC_POINT_EXPANSION_ENTRIES,
+                                       PROP_LORC_POINT_EXPANSION_ENTRIES_DEFAULT)));
       opt->range_cache = range_cache;
     }
 
