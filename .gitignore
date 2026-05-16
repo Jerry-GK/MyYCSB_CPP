@@ -1,6 +1,5 @@
 *.o
 *.d
-__pycache__/
 
 ycsb
 
