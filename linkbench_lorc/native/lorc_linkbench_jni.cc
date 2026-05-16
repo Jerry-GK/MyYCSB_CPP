@@ -164,9 +164,11 @@ Java_com_facebook_LinkBench_LinkStoreLorcKV_nativeOpen(
     jlong blob_file_size, jlong block_cache_size, jlong blob_cache_size,
     jlong range_cache_size, jboolean value_separation_aware,
     jboolean bypass_lower_cache_on_refill, jboolean index_only_on_refill,
-    jlong min_materialized_value_bytes, jlong max_materialized_range_entries,
-    jlong max_materialized_range_bytes, jboolean disable_auto_compactions,
-    jboolean enable_statistics) {
+    jlong min_materialized_value_bytes, jlong min_materialized_range_entries,
+    jlong min_materialized_range_bytes, jlong max_materialized_range_entries,
+    jlong max_materialized_range_bytes, jlong short_range_expansion_entries,
+    jboolean short_range_probe_admission, jlong short_range_probe_capacity,
+    jboolean disable_auto_compactions, jboolean enable_statistics) {
   try {
     std::unique_ptr<LinkBenchHandle> handle(new LinkBenchHandle());
     const std::string engine = JStringToString(env, jengine);
@@ -260,10 +262,20 @@ Java_com_facebook_LinkBench_LinkStoreLorcKV_nativeOpen(
       handle->range_cache->setIndexOnlyOnRefill(index_only_on_refill);
       handle->range_cache->setMinMaterializedValueBytes(
           static_cast<size_t>(min_materialized_value_bytes));
+      handle->range_cache->setMinMaterializedRangeEntries(
+          static_cast<size_t>(min_materialized_range_entries));
+      handle->range_cache->setMinMaterializedRangeBytes(
+          static_cast<size_t>(min_materialized_range_bytes));
       handle->range_cache->setMaxMaterializedRangeEntries(
           static_cast<size_t>(max_materialized_range_entries));
       handle->range_cache->setMaxMaterializedRangeBytes(
           static_cast<size_t>(max_materialized_range_bytes));
+      handle->range_cache->setShortRangeExpansionEntries(
+          static_cast<size_t>(short_range_expansion_entries));
+      handle->range_cache->setShortRangeProbeAdmission(
+          static_cast<bool>(short_range_probe_admission));
+      handle->range_cache->setShortRangeProbeCapacity(
+          static_cast<size_t>(short_range_probe_capacity));
       options.range_cache = handle->range_cache;
     }
 
@@ -299,6 +311,8 @@ Java_com_facebook_LinkBench_LinkStoreLorcKV_nativeClose(JNIEnv* env, jclass,
                 << " current_size=" << handle->range_cache->getCurrentSize()
                 << " capacity=" << handle->range_cache->getCapacity()
                 << " total_range_length=" << handle->range_cache->getTotalRangeLength()
+                << " logical_range_count=" << handle->range_cache->logicalRangeCount()
+                << " physical_range_count=" << handle->range_cache->physicalRangeCount()
                 << " materialized_entries=" << handle->range_cache->totalMaterializedEntries()
                 << " materialized_key_bytes=" << handle->range_cache->totalMaterializedKeyBytes()
                 << " materialized_value_bytes=" << handle->range_cache->totalMaterializedValueBytes()
@@ -314,6 +328,13 @@ Java_com_facebook_LinkBench_LinkStoreLorcKV_nativeClose(JNIEnv* env, jclass,
                 << " value_payload_demotion_ranges=" << handle->range_cache->valuePayloadDemotionRanges()
                 << " value_payload_demotion_entries=" << handle->range_cache->valuePayloadDemotionEntries()
                 << " value_payload_demotion_bytes=" << handle->range_cache->valuePayloadDemotionBytes()
+                << " short_expansion_candidates=" << handle->range_cache->shortRangeExpansionCandidates()
+                << " short_expansion_admitted=" << handle->range_cache->shortRangeExpansionAdmitted()
+                << " short_expansion_filtered=" << handle->range_cache->shortRangeExpansionFiltered()
+                << " short_expansion_extra_entries=" << handle->range_cache->shortRangeExpansionExtraEntries()
+                << " foreground_invalidations=" << handle->range_cache->foregroundInvalidations()
+                << " foreground_invalidation_removed_ranges=" << handle->range_cache->foregroundInvalidationRemovedRanges()
+                << " write_churn_bypass_count=" << handle->range_cache->writeChurnBypassCount()
                 << std::endl;
     }
     if (handle && handle->rocks_db != nullptr) {
@@ -387,6 +408,8 @@ Java_com_facebook_LinkBench_LinkStoreLorcKV_nativePutBatch(
     }
 
     rocksdb::WriteBatch batch;
+    std::vector<std::string> written_keys;
+    written_keys.reserve(static_cast<size_t>(nkeys));
     for (jsize i = 0; i < nkeys; i++) {
       jbyteArray jkey =
           static_cast<jbyteArray>(env->GetObjectArrayElement(jkeys, i));
@@ -397,11 +420,17 @@ Java_com_facebook_LinkBench_LinkStoreLorcKV_nativePutBatch(
       env->DeleteLocalRef(jkey);
       env->DeleteLocalRef(jvalue);
       batch.Put(key, value);
+      written_keys.emplace_back(std::move(key));
     }
     rocksdb::WriteOptions write_options;
     write_options.disableWAL = disable_wal;
     CheckStatus(env, handle->rocks_db->Write(write_options, &batch),
                 "WriteBatch");
+    if (handle->range_cache) {
+      for (const std::string& key : written_keys) {
+        handle->range_cache->invalidateRangeContainingKey(rocksdb::Slice(key));
+      }
+    }
   } catch (const std::exception& e) {
     Throw(env, e.what());
   }

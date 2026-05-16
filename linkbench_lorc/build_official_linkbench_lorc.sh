@@ -18,6 +18,8 @@ install -D \
   "${SCRIPT_DIR}/java/com/facebook/LinkBench/LinkStoreLorcKV.java" \
   "${LINKBENCH_HOME}/src/main/java/com/facebook/LinkBench/LinkStoreLorcKV.java"
 
+python3 "${SCRIPT_DIR}/patch_official_linkbench.py" "${LINKBENCH_HOME}"
+
 (
   cd "${LINKBENCH_HOME}"
   JAVA_HOME="${JAVA_HOME}" PATH="${JAVA_HOME}/bin:${PATH}" \
