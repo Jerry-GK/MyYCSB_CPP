@@ -35,6 +35,9 @@ HYBRID_FIGURE = PAPER / "figures" / "experiments" / "eval_hybrid_cache_split.pdf
 
 ENTRY_SCAN_LENGTHS = [5, 20, 100]
 HYBRID_RANGE_SHARES = [0.0, 0.25, 0.50, 0.75, 1.0]
+HYBRID_HOT_RATIO = 0.25
+HYBRID_SCAN_LENGTH = 20
+HYBRID_COVERAGE_FACTOR = 20.0
 
 
 ENTRY_VARIANTS = [
@@ -256,24 +259,25 @@ def run_hybrid_split(out_dir: Path) -> list[dict[str, str | int | float]]:
     workload_dir.mkdir(parents=True, exist_ok=True)
     workload, op_count, warmup_ops, warmup_ratio = fair.write_workload(
         workload_dir,
-        "hybrid_split_sl20",
+        "hybrid_split_sl20_hot25",
         dataset=dataset,
         measured_ops=30_000,
-        hot_ratio=0.05,
+        hot_ratio=HYBRID_HOT_RATIO,
         read_prop=0.0,
         update_prop=0.0,
         scan_prop=1.0,
         requestdistribution="zipfian",
-        scan_length=20,
+        scan_length=HYBRID_SCAN_LENGTH,
         min_warmup_ops=40_000,
-        coverage_factor=20.0,
+        coverage_factor=HYBRID_COVERAGE_FACTOR,
     )
     for engine in ("rocksdb", "blobdb"):
-        base_variant = (
-            fair.VARIANTS[1] if engine == "rocksdb" else fair.VARIANTS[3]
-        )
         for share in HYBRID_RANGE_SHARES:
             label = f"{'RocksDB' if engine == 'rocksdb' else 'BlobDB'} split {int(share * 100)}pct"
+            if engine == "rocksdb":
+                base_variant = fair.VARIANTS[1] if share > 0 else fair.VARIANTS[0]
+            else:
+                base_variant = fair.VARIANTS[3] if share > 0 else fair.VARIANTS[2]
             variant = fair.Variant(
                 label,
                 engine,
@@ -292,11 +296,11 @@ def run_hybrid_split(out_dir: Path) -> list[dict[str, str | int | float]]:
                 props=props,
                 x_value=f"{share:.2f}",
                 x_label=f"{int(share * 100)}%",
-                scan_length=20,
+                scan_length=HYBRID_SCAN_LENGTH,
                 warmup_ops=warmup_ops,
                 warmup_ratio=warmup_ratio,
-                hot_ratio=0.05,
-                timeout=1800,
+                hot_ratio=HYBRID_HOT_RATIO,
+                timeout=5400,
                 seed=20_000 + int(share * 1000) + (0 if engine == "rocksdb" else 5000),
             )
             row["operationcount"] = op_count
@@ -314,9 +318,18 @@ def write_summary(rows: list[dict[str, str | int | float]], path: Path) -> None:
                 keys.append(key)
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
+        writer = csv.DictWriter(
+            f, fieldnames=keys, extrasaction="ignore", lineterminator="\n"
+        )
         writer.writeheader()
         writer.writerows(rows)
+
+
+def read_summary(path: Path) -> list[dict[str, str]]:
+    if not path.exists():
+        return []
+    with path.open(newline="") as f:
+        return list(csv.DictReader(f))
 
 
 def f(row: dict[str, str | int | float], key: str, default: float = 0.0) -> float:
@@ -403,7 +416,15 @@ def main() -> int:
 
     local_summary = out_dir / "lorc_reviewer_baselines_summary.csv"
     write_summary(rows, local_summary)
-    write_summary(rows, SUMMARY)
+    paper_rows: list[dict[str, str | int | float]] = rows
+    if args.suite != "all":
+        replaced_suites = {str(row["suite"]) for row in rows}
+        preserved_rows = [
+            row for row in read_summary(SUMMARY)
+            if row.get("suite") not in replaced_suites
+        ]
+        paper_rows = [*preserved_rows, *rows]
+    write_summary(paper_rows, SUMMARY)
     if any(r["suite"] == "entry_baseline" for r in rows):
         plot_entry(rows)
     if any(r["suite"] == "hybrid_split" for r in rows):

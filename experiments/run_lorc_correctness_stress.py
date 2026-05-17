@@ -112,7 +112,9 @@ def run() -> Path:
         )
     summary = out_dir / "lorc_correctness_stress_summary.csv"
     with summary.open("w", newline="") as f:
-        writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()))
+        writer = csv.DictWriter(
+            f, fieldnames=list(rows[0].keys()), lineterminator="\n"
+        )
         writer.writeheader()
         writer.writerows(rows)
     paper_summary = PAPER / "figures" / "experiments" / "lorc_correctness_stress_summary.csv"
