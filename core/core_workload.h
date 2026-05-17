@@ -191,6 +191,8 @@ class CoreWorkload {
   ///
   static const std::string WARMUP_OPERATION_PROPERTY;
   static const std::string WARMUP_OPERATION_DEFAULT;
+  static const std::string WARMUP_SCAN_LENGTH_PROPERTY;
+  static const std::string WARMUP_SCAN_LENGTH_DEFAULT;
 
   ///
   /// Initialize the scenario.
@@ -211,7 +213,8 @@ class CoreWorkload {
       field_len_generator_(nullptr), key_chooser_(nullptr), hot_key_chooser_(nullptr), field_chooser_(nullptr),
       scan_len_chooser_(nullptr), insert_key_sequence_(nullptr),
       transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), random_inserts_(false), record_count_(0),
-      max_scan_len_(0), hot_data_ratio_(1.0), warmup_ratio_(0.0) {
+      max_scan_len_(0), warmup_scan_len_(0), hot_data_ratio_(1.0),
+      warmup_ratio_(0.0) {
   }
 
   virtual ~CoreWorkload() {
@@ -236,7 +239,7 @@ class CoreWorkload {
 
   DB::Status TransactionRead(DB &db);
   DB::Status TransactionReadModifyWrite(DB &db);
-  DB::Status TransactionScan(DB &db);
+  DB::Status TransactionScan(DB &db, bool is_warmup = false);
   DB::Status TransactionScanWarmupBoundary(DB &db, int op_num);
   DB::Status TransactionUpdate(DB &db);
   DB::Status TransactionInsert(DB &db);
@@ -259,6 +262,7 @@ class CoreWorkload {
   bool random_inserts_;
   size_t record_count_;
   size_t max_scan_len_;
+  size_t warmup_scan_len_;
   int zero_padding_;
   double hot_data_ratio_;
   double warmup_ratio_;

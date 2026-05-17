@@ -7,6 +7,8 @@
 //  Modifications Copyright 2023 Chengye YU <yuchengye2013 AT outlook.com>.
 //
 
+#include <algorithm>
+
 #include "uniform_generator.h"
 #include "zipfian_generator.h"
 #include "scrambled_zipfian_generator.h"
@@ -88,6 +90,8 @@ const string CoreWorkload::MAX_SCAN_LENGTH_DEFAULT = "1000";
 
 const string CoreWorkload::SCAN_LENGTH_DISTRIBUTION_PROPERTY = "scanlengthdistribution";
 const string CoreWorkload::SCAN_LENGTH_DISTRIBUTION_DEFAULT = "uniform";
+const string CoreWorkload::WARMUP_SCAN_LENGTH_PROPERTY = "warmupscanlength";
+const string CoreWorkload::WARMUP_SCAN_LENGTH_DEFAULT = "0";
 
 const string CoreWorkload::INSERT_ORDER_PROPERTY = "insertorder";
 const string CoreWorkload::INSERT_ORDER_DEFAULT = "hashed";
@@ -138,6 +142,8 @@ void CoreWorkload::Init(const utils::Properties &p) {
   int min_scan_len = std::stoi(p.GetProperty(MIN_SCAN_LENGTH_PROPERTY, MIN_SCAN_LENGTH_DEFAULT));
   int max_scan_len = std::stoi(p.GetProperty(MAX_SCAN_LENGTH_PROPERTY, MAX_SCAN_LENGTH_DEFAULT));
   max_scan_len_ = max_scan_len;
+  warmup_scan_len_ = static_cast<size_t>(std::stoull(
+      p.GetProperty(WARMUP_SCAN_LENGTH_PROPERTY, WARMUP_SCAN_LENGTH_DEFAULT)));
   std::string scan_len_dist = p.GetProperty(SCAN_LENGTH_DISTRIBUTION_PROPERTY,
                                             SCAN_LENGTH_DISTRIBUTION_DEFAULT);
   int insert_start = std::stoi(p.GetProperty(INSERT_START_PROPERTY, INSERT_START_DEFAULT));
@@ -258,19 +264,26 @@ void CoreWorkload::Init(const utils::Properties &p) {
 
   // Create hot data key chooser for read/scan operations
   uint64_t hot_data_start = static_cast<uint64_t>(record_count_ * (1.0 - hot_data_ratio_));
+  const size_t key_range_scan_len =
+      std::max(static_cast<size_t>(max_scan_len), warmup_scan_len_);
   if (request_dist == "uniform") {
-    hot_key_chooser_ = new UniformGenerator(hot_data_start, record_count_ - 1 - max_scan_len + 1);
+    hot_key_chooser_ = new UniformGenerator(
+        hot_data_start, record_count_ - 1 - key_range_scan_len + 1);
   } else if (request_dist == "zipfian") {
     if (p.ContainsKey(ZIPFIAN_CONST_PROPERTY)) {
       double zipfian_const = std::stod(p.GetProperty(ZIPFIAN_CONST_PROPERTY));
-      hot_key_chooser_ = new ScrambledZipfianGenerator(hot_data_start, record_count_ - 1 - max_scan_len + 1, zipfian_const);
+      hot_key_chooser_ = new ScrambledZipfianGenerator(
+          hot_data_start, record_count_ - 1 - key_range_scan_len + 1,
+          zipfian_const);
     } else {
-      hot_key_chooser_ = new ScrambledZipfianGenerator(hot_data_start, record_count_ - 1 - max_scan_len + 1);
+      hot_key_chooser_ = new ScrambledZipfianGenerator(
+          hot_data_start, record_count_ - 1 - key_range_scan_len + 1);
     }
   } else if (request_dist == "latest") {
     if (random_inserts_) {
       // For random inserts, use uniform distribution as fallback
-      hot_key_chooser_ = new UniformGenerator(hot_data_start, record_count_ - 1 - max_scan_len + 1);
+      hot_key_chooser_ = new UniformGenerator(
+          hot_data_start, record_count_ - 1 - key_range_scan_len + 1);
     } else {
       hot_key_chooser_ = new SkewedLatestGenerator(*static_cast<AcknowledgedCounterGenerator*>(transaction_insert_key_sequence_));
     }
@@ -407,7 +420,7 @@ bool CoreWorkload::DoTransaction(DB &db, bool is_warmup, int op_num) {
         if (op_num == 1 || op_num == 2) {
           status = TransactionScanWarmupBoundary(db, op_num);
         } else {
-          status = TransactionScan(db);
+          status = TransactionScan(db, true);
         }
         break;
       case READMODIFYWRITE:
@@ -477,11 +490,13 @@ DB::Status CoreWorkload::TransactionReadModifyWrite(DB &db) {
   return db.Update(table_name_, key, values);
 }
 
-DB::Status CoreWorkload::TransactionScan(DB &db) {
+DB::Status CoreWorkload::TransactionScan(DB &db, bool is_warmup) {
   // uint64_t key_num = NextTransactionKeyNum();
   uint64_t key_num = NextTransactionKeyNumHot();
   const std::string key = BuildKeyName(key_num);
-  int len = scan_len_chooser_->Next();
+  int len = is_warmup && warmup_scan_len_ > 0
+                ? static_cast<int>(warmup_scan_len_)
+                : scan_len_chooser_->Next();
   std::vector<std::vector<DB::Field>> result;
   if (!read_all_fields()) {
     std::vector<std::string> fields;
