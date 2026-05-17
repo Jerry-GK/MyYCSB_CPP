@@ -12,10 +12,12 @@
 #include <iostream>
 #include <string>
 #include <atomic>
+#include <memory>
 
 #include "db.h"
 #include "core_workload.h"
 #include "utils/countdown_latch.h"
+#include "perf_counters.h"
 #include "utils/rate_limit.h"
 #include "utils/timer.h"
 #include "utils/utils.h"
@@ -61,11 +63,17 @@ inline int ClientThreadWithWarmup(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const 
                                   utils::CountDownLatch *warmup_latch, std::atomic<bool> *measurement_started,
                                   utils::Timer<double> *measurement_timer,
                                   utils::CountDownLatch *measurement_latch,
-                                  const int warmup_ops, utils::RateLimiter *rlim) {
+                                  const int warmup_ops, utils::RateLimiter *rlim,
+                                  bool enable_l1d_perf, int thread_id) {
 
   try {
     if (init_db) {
       db->Init();
+    }
+
+    std::unique_ptr<utils::L1DPerfCounters> l1d_counters;
+    if (enable_l1d_perf) {
+      l1d_counters = std::make_unique<utils::L1DPerfCounters>();
     }
 
     int ops = 0;
@@ -84,6 +92,9 @@ inline int ClientThreadWithWarmup(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const 
         if (measurement_started->compare_exchange_strong(expected, true)) {
           measurement_timer->Start();
         }
+        if (l1d_counters) {
+          l1d_counters->Start();
+        }
       }
 
       if (is_loading) {
@@ -94,6 +105,11 @@ inline int ClientThreadWithWarmup(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const 
         wl->DoTransaction(*db, in_warmup, i+1);
       }
       ops++;
+    }
+
+    if (l1d_counters) {
+      l1d_counters->Stop();
+      l1d_counters->Print("thread" + std::to_string(thread_id));
     }
 
     measurement_latch->CountDown();

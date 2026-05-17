@@ -115,6 +115,8 @@ int main(const int argc, const char *argv[]) {
   }
   const bool single_thread_warmup =
       (props.GetProperty("singlethreadwarmup", "false") == "true");
+  const bool enable_l1d_perf =
+      (props.GetProperty("ycsb.perf_l1d", "false") == "true");
 
   std::vector<int> per_thread_warmup_ops;
   per_thread_warmup_ops.reserve(num_threads);
@@ -241,7 +243,8 @@ int main(const int argc, const char *argv[]) {
                                              thread_ops, false, !do_load, true, &latch, &warmup_latch, 
                                              &measurement_started, &measurement_timer, 
                                              &measurement_latch,
-                                             thread_warmup_ops, rlim));
+                                             thread_warmup_ops, rlim,
+                                             enable_l1d_perf, i));
     }
 
     std::future<void> rlim_future;

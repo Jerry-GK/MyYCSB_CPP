@@ -71,6 +71,9 @@ namespace {
   const std::string PROP_RANGE_CACHE_SIZE = "rocksdb.range_cache_size";
   const std::string PROP_RANGE_CACHE_SIZE_DEFAULT = "0";
 
+  const std::string PROP_RANGE_CACHE_BACKEND = "rocksdb.range_cache_backend";
+  const std::string PROP_RANGE_CACHE_BACKEND_DEFAULT = "lorc";
+
   const std::string PROP_RANGE_CACHE_PHYSICAL_TYPE = "rocksdb.range_cache_physical_type";
   const std::string PROP_RANGE_CACHE_PHYSICAL_TYPE_DEFAULT = "continuous";
 
@@ -468,6 +471,9 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
 
     size_t range_cache_size = std::stoul(props.GetProperty(PROP_RANGE_CACHE_SIZE, PROP_RANGE_CACHE_SIZE_DEFAULT));
     if (range_cache_size > 0) {
+      const std::string range_cache_backend =
+          props.GetProperty(PROP_RANGE_CACHE_BACKEND,
+                            PROP_RANGE_CACHE_BACKEND_DEFAULT);
       const std::string physical_type =
           props.GetProperty(PROP_RANGE_CACHE_PHYSICAL_TYPE, PROP_RANGE_CACHE_PHYSICAL_TYPE_DEFAULT);
       rocksdb::PhysicalRangeType range_type = rocksdb::PhysicalRangeType::VEC;
@@ -489,9 +495,17 @@ void RocksdbDB::GetOptions(const utils::Properties &props, rocksdb::Options *opt
         throw utils::Exception("Unknown rocksdb.range_cache_victim_policy: " +
                                victim_policy_name);
       }
-      range_cache = rocksdb::NewRBTreeLogicalOrderedRangeCache(
-          range_cache_size, rocksdb::LorcLogger::Level::WARN, range_type,
-          victim_policy);
+      if (range_cache_backend == "skiplist") {
+        range_cache = rocksdb::NewSkipListRangeCache(
+            range_cache_size, rocksdb::LorcLogger::Level::WARN);
+      } else if (range_cache_backend == "lorc") {
+        range_cache = rocksdb::NewRBTreeLogicalOrderedRangeCache(
+            range_cache_size, rocksdb::LorcLogger::Level::WARN, range_type,
+            victim_policy);
+      } else {
+        throw utils::Exception("Unknown rocksdb.range_cache_backend: " +
+                               range_cache_backend);
+      }
       if (props.GetProperty(PROP_LORC_ENABLE_STATS,
                             PROP_LORC_ENABLE_STATS_DEFAULT) == "true") {
         range_cache->setEnableStatistic(true);
