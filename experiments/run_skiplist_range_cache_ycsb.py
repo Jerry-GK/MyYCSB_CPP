@@ -23,19 +23,18 @@ PAPER = ROOT.parent / "68368b2dccae04737d71ce11"
 SOURCE_DB = (
     ROOT
     / "db"
-    / "ycsb-source-24B-256B-representation"
-    / "ycsb-rocksdb-source-24B-256B-representation-random"
+    / "ycsb-source-24B-16B-representation"
+    / "ycsb-rocksdb-source-24B-16B-representation-random"
 )
 SUMMARY = PAPER / "figures" / "experiments" / "lorc_skiplist_ycsb_summary.csv"
 FIGURE = PAPER / "figures" / "experiments" / "eval_representation_probe.pdf"
 
 RECORDCOUNT = 1_048_576
-FIELDLENGTH = 256
+FIELDLENGTH = 16
 CACHE_BUDGET = 128 * 1024 * 1024
-HOT_RATIO = 0.20
+HOT_RATIO = 0.02
 SCAN_LENGTHS = [1, 10, 100, 1000, 10000]
-WARMUP_SCAN_LENGTH = max(SCAN_LENGTHS)
-MEASURED_ENTRY_TARGET = 5_000_000
+MEASURED_ENTRY_TARGET = 10_000_000
 MAX_MEASURED_OPS = 50_000
 MIN_MEASURED_OPS = 500
 WARMUP_COVERAGE_FACTOR = 20.0
@@ -66,9 +65,9 @@ def measured_ops(scan_length: int) -> int:
     )
 
 
-def warmup_ops() -> int:
+def warmup_ops(scan_length: int) -> int:
     hot_records = RECORDCOUNT * HOT_RATIO
-    coverage_ops = math.ceil(WARMUP_COVERAGE_FACTOR * hot_records / WARMUP_SCAN_LENGTH)
+    coverage_ops = math.ceil(WARMUP_COVERAGE_FACTOR * hot_records / scan_length)
     return max(MIN_WARMUP_OPS, coverage_ops)
 
 
@@ -100,7 +99,7 @@ requestdistribution=zipfian
 
 minscanlength={scan_length}
 maxscanlength={scan_length}
-warmupscanlength={WARMUP_SCAN_LENGTH}
+warmupscanlength={scan_length}
 scanlengthdistribution=uniform
 """
 
@@ -124,12 +123,13 @@ rocksdb.lorc_enable_stats=true
 
 rocksdb.compression=no
 rocksdb.use_direct_reads=false
+rocksdb.reuse_scan_buffers=true
 ycsb.perf_l1d=false
 """
 
 
 def load_workload_text() -> str:
-    return f"""# Generated 256B-value source DB for representation experiment.
+    return f"""# Generated 16B-value source DB for representation experiment.
 recordcount={RECORDCOUNT}
 operationcount={RECORDCOUNT}
 insertorder=random
@@ -173,7 +173,7 @@ rocksdb.use_direct_reads=false
 def ensure_source_db() -> None:
     if SOURCE_DB.exists():
         return
-    print(f"building 256B representation source DB at {SOURCE_DB}", flush=True)
+    print(f"building {FIELDLENGTH}B representation source DB at {SOURCE_DB}", flush=True)
     SOURCE_DB.parent.mkdir(parents=True, exist_ok=True)
     shutil.rmtree(SOURCE_DB, ignore_errors=True)
     with tempfile.TemporaryDirectory(prefix="lorc-repr-load-") as tmp:
@@ -214,7 +214,7 @@ def parse_lorc_stats(text: str) -> dict[str, str]:
 
 
 def run_case(variant: Variant, scan_length: int) -> dict[str, object]:
-    warmup = warmup_ops()
+    warmup = warmup_ops(scan_length)
     with tempfile.TemporaryDirectory(prefix="lorc-skiplist-ycsb-") as tmp:
         workload = Path(tmp) / "workload.properties"
         props = Path(tmp) / "rocksdb.properties"
@@ -253,6 +253,8 @@ def run_case(variant: Variant, scan_length: int) -> dict[str, object]:
         "warmup_ops": warmup,
         "measured_ops": measured_ops(scan_length),
         "throughput_ops_sec": float(throughput_match.group(1)),
+        "mean_scan_latency_us": round(1_000_000.0 / float(throughput_match.group(1)), 3),
+        "returned_records_per_sec": round(float(throughput_match.group(1)) * scan_length, 3),
         "full_hit_rate": float(lorc_stats.get("full_hit_rate", 0)),
         "hit_size_rate": float(lorc_stats.get("hit_size_rate", 0)),
         "current_size": int(float(lorc_stats.get("current_size", 0))),
@@ -280,7 +282,7 @@ def plot(rows: list[dict[str, object]]) -> None:
         data = [r for r in rows if r["variant"] == variant.label]
         data.sort(key=lambda r: int(r["scan_length"]))
         xs = [int(r["scan_length"]) for r in data]
-        ys = [float(r["throughput_ops_sec"]) for r in data]
+        ys = [float(r["returned_records_per_sec"]) for r in data]
         ax.plot(
             xs,
             ys,
@@ -291,11 +293,11 @@ def plot(rows: list[dict[str, object]]) -> None:
             label=variant.label.replace(" range cache", ""),
         )
     ax.set_xscale("log")
-    ax.set_yscale("log")
     ax.set_xticks(SCAN_LENGTHS)
     ax.get_xaxis().set_major_formatter(lambda x, _pos: f"{int(x)}")
     ax.set_xlabel("Scan length")
-    ax.set_ylabel("Throughput (ops/s)")
+    ax.set_ylabel("Returned records/s")
+    ax.yaxis.set_major_formatter(lambda y, _pos: f"{y / 1e6:.1f}M")
     ax.grid(axis="y", color="#E7E7E7", linewidth=0.65)
     legend = ax.legend(frameon=True, loc="best")
     legend.get_frame().set_linewidth(0)
@@ -314,7 +316,6 @@ def main() -> int:
             row = run_case(variant, scan_length)
             print(row, flush=True)
             rows.append(row)
-
     SUMMARY.parent.mkdir(parents=True, exist_ok=True)
     with SUMMARY.open("w", newline="") as f:
         writer = csv.DictWriter(f, fieldnames=list(rows[0].keys()), lineterminator="\n")

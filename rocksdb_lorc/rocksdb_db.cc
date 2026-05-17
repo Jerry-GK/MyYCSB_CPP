@@ -182,6 +182,9 @@ namespace {
   const std::string PROP_DESERIALIZE_ON_READ = "rocksdb.deserialize_on_read";
   const std::string PROP_DESERIALIZE_ON_READ_DEFAULT = "false";
 
+  const std::string PROP_REUSE_SCAN_BUFFERS = "rocksdb.reuse_scan_buffers";
+  const std::string PROP_REUSE_SCAN_BUFFERS_DEFAULT = "false";
+
   static std::shared_ptr<rocksdb::Env> env_guard;
   static std::shared_ptr<rocksdb::Cache> block_cache;
   static std::shared_ptr<rocksdb::Cache> blob_cache;
@@ -272,6 +275,9 @@ void RocksdbDB::Init() {
                                             CoreWorkload::FIELD_COUNT_DEFAULT));
   disable_wal_ = (props.GetProperty(PROP_DISABLE_WAL, PROP_DISABLE_WAL_DEFAULT) == "true");
   deserialize_on_read_ = (props.GetProperty(PROP_DESERIALIZE_ON_READ, PROP_DESERIALIZE_ON_READ_DEFAULT) == "true");
+  reuse_scan_buffers_ =
+      (props.GetProperty(PROP_REUSE_SCAN_BUFFERS,
+                         PROP_REUSE_SCAN_BUFFERS_DEFAULT) == "true");
   validate_scan_with_iterator_ =
       (props.GetProperty(PROP_VALIDATE_SCAN_WITH_ITERATOR,
                          PROP_VALIDATE_SCAN_WITH_ITERATOR_DEFAULT) == "true");
@@ -762,8 +768,14 @@ void RocksdbDB::ValidateScanResult(const std::string &start_key, int len,
 DB::Status RocksdbDB::ScanSingle(const std::string &table, const std::string &key, int len,
                                  const std::vector<std::string> *fields,
                                  std::vector<std::vector<Field>> &result) {
-  std::vector<std::string> keys;
-  std::vector<std::string> values;
+  std::vector<std::string> local_keys;
+  std::vector<std::string> local_values;
+  std::vector<std::string>& keys =
+      reuse_scan_buffers_ ? scan_keys_buffer_ : local_keys;
+  std::vector<std::string>& values =
+      reuse_scan_buffers_ ? scan_values_buffer_ : local_values;
+  keys.clear();
+  values.clear();
   rocksdb::Status s = db_->Scan(rocksdb::ReadOptions(), db_->DefaultColumnFamily(), rocksdb::Slice(key), len, &keys, &values);
   if (!s.ok()) {
     throw utils::Exception(std::string("RocksDB Scan: ") + s.ToString());

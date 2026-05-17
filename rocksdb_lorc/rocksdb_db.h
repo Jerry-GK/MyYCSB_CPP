@@ -100,8 +100,11 @@ class RocksdbDB : public DB {
   bool disable_wal_;
   bool deserialize_on_read_;
   bool validate_scan_with_iterator_;
+  bool reuse_scan_buffers_;
   int validate_scan_limit_;
   int validated_scan_count_;
+  std::vector<std::string> scan_keys_buffer_;
+  std::vector<std::string> scan_values_buffer_;
 
   static std::vector<rocksdb::ColumnFamilyHandle *> cf_handles_;
   static rocksdb::DB *db_;
