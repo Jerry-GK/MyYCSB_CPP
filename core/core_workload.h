@@ -193,6 +193,8 @@ class CoreWorkload {
   static const std::string WARMUP_OPERATION_DEFAULT;
   static const std::string WARMUP_SCAN_LENGTH_PROPERTY;
   static const std::string WARMUP_SCAN_LENGTH_DEFAULT;
+  static const std::string WARMUP_BOUNDARY_PROPERTY;
+  static const std::string WARMUP_BOUNDARY_DEFAULT;
 
   ///
   /// Initialize the scenario.
@@ -214,7 +216,7 @@ class CoreWorkload {
       scan_len_chooser_(nullptr), insert_key_sequence_(nullptr),
       transaction_insert_key_sequence_(nullptr), ordered_inserts_(true), random_inserts_(false), record_count_(0),
       max_scan_len_(0), warmup_scan_len_(0), hot_data_ratio_(1.0),
-      warmup_ratio_(0.0) {
+      warmup_ratio_(0.0), warmup_boundary_(true) {
   }
 
   virtual ~CoreWorkload() {
@@ -266,6 +268,7 @@ class CoreWorkload {
   int zero_padding_;
   double hot_data_ratio_;
   double warmup_ratio_;
+  bool warmup_boundary_;
   bool enable_lorc_logger_;
 };
 

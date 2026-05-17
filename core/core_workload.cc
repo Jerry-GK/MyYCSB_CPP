@@ -115,6 +115,8 @@ const string CoreWorkload::WARMUP_RATIO_PROPERTY = "warmup_ratio";
 const string CoreWorkload::WARMUP_RATIO_DEFAULT = "0.0";
 const string CoreWorkload::WARMUP_OPERATION_PROPERTY = "warmupoperation";
 const string CoreWorkload::WARMUP_OPERATION_DEFAULT = "scan";
+const string CoreWorkload::WARMUP_BOUNDARY_PROPERTY = "warmupboundary";
+const string CoreWorkload::WARMUP_BOUNDARY_DEFAULT = "true";
 
 namespace ycsbc {
 
@@ -159,6 +161,8 @@ void CoreWorkload::Init(const utils::Properties &p) {
   if (warmup_ratio_ < 0.0 || warmup_ratio_ > 1.0) {
     throw utils::Exception("warmup_ratio must be between 0.0 and 1.0");
   }
+  warmup_boundary_ = utils::StrToBool(
+      p.GetProperty(WARMUP_BOUNDARY_PROPERTY, WARMUP_BOUNDARY_DEFAULT));
 
   read_all_fields_ = utils::StrToBool(p.GetProperty(READ_ALL_FIELDS_PROPERTY,
                                                     READ_ALL_FIELDS_DEFAULT));
@@ -249,6 +253,13 @@ void CoreWorkload::Init(const utils::Properties &p) {
     } else {
       key_chooser_ = new ScrambledZipfianGenerator(record_count_);
     }
+  } else if (request_dist == "orderedzipfian") {
+    if (p.ContainsKey(ZIPFIAN_CONST_PROPERTY)) {
+      double zipfian_const = std::stod(p.GetProperty(ZIPFIAN_CONST_PROPERTY));
+      key_chooser_ = new ZipfianGenerator(0, record_count_ - 1, zipfian_const);
+    } else {
+      key_chooser_ = new ZipfianGenerator(record_count_);
+    }
   } else if (request_dist == "latest") {
     if (random_inserts_) {
       // For random inserts, use uniform distribution as fallback since SkewedLatestGenerator requires CounterGenerator
@@ -277,6 +288,16 @@ void CoreWorkload::Init(const utils::Properties &p) {
           zipfian_const);
     } else {
       hot_key_chooser_ = new ScrambledZipfianGenerator(
+          hot_data_start, record_count_ - 1 - key_range_scan_len + 1);
+    }
+  } else if (request_dist == "orderedzipfian") {
+    if (p.ContainsKey(ZIPFIAN_CONST_PROPERTY)) {
+      double zipfian_const = std::stod(p.GetProperty(ZIPFIAN_CONST_PROPERTY));
+      hot_key_chooser_ = new ZipfianGenerator(
+          hot_data_start, record_count_ - 1 - key_range_scan_len + 1,
+          zipfian_const);
+    } else {
+      hot_key_chooser_ = new ZipfianGenerator(
           hot_data_start, record_count_ - 1 - key_range_scan_len + 1);
     }
   } else if (request_dist == "latest") {
@@ -417,7 +438,7 @@ bool CoreWorkload::DoTransaction(DB &db, bool is_warmup, int op_num) {
         status = TransactionInsert(db);
         break;
       case SCAN:
-        if (op_num == 1 || op_num == 2) {
+        if (warmup_boundary_ && (op_num == 1 || op_num == 2)) {
           status = TransactionScanWarmupBoundary(db, op_num);
         } else {
           status = TransactionScan(db, true);

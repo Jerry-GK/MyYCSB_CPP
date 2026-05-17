@@ -22,9 +22,7 @@ class ScrambledZipfianGenerator : public Generator<uint64_t> {
  public:
   ScrambledZipfianGenerator(uint64_t min, uint64_t max, double zipfian_const) :
       base_(min), num_items_(max - min + 1),
-      generator_(zipfian_const == kUsedZipfianConstant ?
-                    ZipfianGenerator(0, kItemCount, zipfian_const, kZetan) :
-                    ZipfianGenerator(0, kItemCount, zipfian_const)) { }
+      generator_(BuildGenerator(num_items_, zipfian_const)) { }
 
   ScrambledZipfianGenerator(uint64_t min, uint64_t max) :
       ScrambledZipfianGenerator(min, max, ZipfianGenerator::kZipfianConst) { }
@@ -42,6 +40,14 @@ class ScrambledZipfianGenerator : public Generator<uint64_t> {
   const uint64_t base_;
   const uint64_t num_items_;
   ZipfianGenerator generator_;
+
+  static ZipfianGenerator BuildGenerator(uint64_t num_items,
+                                         double zipfian_const) {
+    if (zipfian_const == kUsedZipfianConstant) {
+      return ZipfianGenerator(0, kItemCount, zipfian_const, kZetan);
+    }
+    return ZipfianGenerator(0, num_items - 1, zipfian_const);
+  }
 
   uint64_t Scramble(uint64_t value) const;
 };
