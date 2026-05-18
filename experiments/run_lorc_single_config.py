@@ -525,6 +525,11 @@ def main() -> int:
         action="store_true",
         help="Override config and reuse the source database.",
     )
+    parser.add_argument(
+        "--build-only",
+        action="store_true",
+        help="Build or refresh the source database, then exit before warmup/run.",
+    )
     args = parser.parse_args()
 
     cfg = load_config(args.config)
@@ -564,6 +569,10 @@ def main() -> int:
         run_load(cfg=cfg, dataset=dataset, source_path=source_path, out_dir=out_dir)
     else:
         print("[load] skipped; reusing existing source database")
+
+    if args.build_only:
+        print("[build-only] source database is ready; skipping warmup/run")
+        return 0
 
     summary = run_measurement(
         cfg=cfg, dataset=dataset, source_path=source_path, out_dir=out_dir
