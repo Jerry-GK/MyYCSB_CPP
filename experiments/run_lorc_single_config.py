@@ -278,13 +278,14 @@ def system_props(cfg: SingleConfig, variant: fair.Variant) -> dict[str, str]:
 
 def run_props(cfg: SingleConfig, variant: fair.Variant, read_only: bool) -> dict[str, str]:
     props = system_props(cfg, variant)
+    compaction_required = cfg.enable_compaction or cfg.update_ratio > 0.0
     if variant.engine == "lsbm":
         props.update(
             {
                 "leveldb.destroy": "false",
-                "leveldb.run_compaction": "true" if cfg.enable_compaction else "false",
+                "leveldb.run_compaction": "true" if compaction_required else "false",
                 "leveldb.compaction_buffer_trim_interval": (
-                    "30" if cfg.enable_compaction else "1000000000"
+                    "30" if compaction_required else "1000000000"
                 ),
             }
         )
@@ -295,7 +296,7 @@ def run_props(cfg: SingleConfig, variant: fair.Variant, read_only: bool) -> dict
             "rocksdb.create_if_missing": "false",
             "rocksdb.destroy": "false",
             "rocksdb.disable_auto_compactions": (
-                "false" if cfg.enable_compaction else "true"
+                "false" if compaction_required else "true"
             ),
             "rocksdb.read_only": "true" if read_only else "false",
         }
@@ -409,10 +410,7 @@ def run_measurement(
 
     props = run_props(cfg, variant, read_only=read_only)
     if cfg.update_ratio > 0 and not cfg.enable_compaction:
-        print(
-            "[warn] update_ratio > 0 while enable_compaction=false; "
-            "running exactly as configured."
-        )
+        print("[compaction] update workload: forcing compaction on for the work DB")
     try:
         rc, text, time_info = fair.run_ycsb(
             mode="run",
