@@ -432,6 +432,12 @@ def run_measurement(
 
     parsed = fair.parse_log(text)
     parsed.update(time_info)
+    measurement_runtime = float(parsed.get("measurement_runtimesec", 0.0) or 0.0)
+    scan_count = float(parsed.get("scan_count", 0.0) or 0.0)
+    update_count = float(parsed.get("update_count", 0.0) or 0.0)
+    if measurement_runtime > 0.0:
+        parsed["scan_throughput_ops_sec"] = scan_count / measurement_runtime
+        parsed["update_throughput_ops_sec"] = update_count / measurement_runtime
     parsed.update(
         {
             "system": canonical_system(cfg.system),
@@ -439,6 +445,8 @@ def run_measurement(
             "source_path": str(source_path),
             "read_only": read_only,
             "recordcount": dataset.recordcount,
+            "key_size": cfg.key_size,
+            "value_size": cfg.value_size,
             "estimated_data_bytes": dataset.recordcount
             * (cfg.key_size + cfg.value_size),
             "cache_bytes": cache_bytes(cfg),
@@ -482,6 +490,11 @@ def print_summary(summary: dict[str, Any]) -> None:
     print(f"measured_operations    : {summary['measured_operations']}")
     print(f"throughput             : {fnum('throughputops/sec'):.2f} ops/s")
     if "scan_count" in summary:
+        if "scan_throughput_ops_sec" in summary:
+            print(
+                "scan throughput        : "
+                f"{fnum('scan_throughput_ops_sec'):.2f} scans/s"
+            )
         print(
             "scan latency           : "
             f"avg={fnum('scan_avg_us'):.2f} us, "
