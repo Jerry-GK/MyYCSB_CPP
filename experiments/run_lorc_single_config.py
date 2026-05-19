@@ -278,10 +278,10 @@ def system_props(cfg: SingleConfig, variant: fair.Variant) -> dict[str, str]:
 
 def run_props(cfg: SingleConfig, variant: fair.Variant, read_only: bool) -> dict[str, str]:
     props = system_props(cfg, variant)
-    # Read-only scan experiments must not let background compaction pollute
-    # latency or perf profiles.  Foreground-update workloads are the only
-    # measured runs that require compaction to stay enabled.
-    compaction_required = cfg.update_ratio > 0.0
+    # Read-only scan experiments normally keep background compaction out of the
+    # measurement.  Workload-mix sweeps can explicitly enable it on a temporary
+    # work DB with cfg.enable_compaction.
+    compaction_required = cfg.update_ratio > 0.0 or cfg.enable_compaction
     if variant.engine == "lsbm":
         props.update(
             {
@@ -292,6 +292,8 @@ def run_props(cfg: SingleConfig, variant: fair.Variant, read_only: bool) -> dict
                 ),
             }
         )
+        if read_only and cfg.threads > 1:
+            props["singlethreadwarmup"] = "true"
         return props
 
     props.update(
@@ -304,6 +306,8 @@ def run_props(cfg: SingleConfig, variant: fair.Variant, read_only: bool) -> dict
             "rocksdb.read_only": "true" if read_only else "false",
         }
     )
+    if read_only and cfg.threads > 1:
+        props["singlethreadwarmup"] = "true"
     return props
 
 
@@ -403,10 +407,10 @@ def run_measurement(
         )
     )
 
-    read_only = (cfg.update_ratio == 0.0)
+    read_only = (cfg.update_ratio == 0.0 and not cfg.enable_compaction)
     db_path = source_path
     work_db: Path | None = None
-    if not read_only:
+    if cfg.update_ratio > 0.0 or cfg.enable_compaction:
         work_db = out_dir / "workdb"
         if work_db.exists():
             shutil.rmtree(work_db)
@@ -416,8 +420,8 @@ def run_measurement(
     props = run_props(cfg, variant, read_only=read_only)
     if cfg.update_ratio > 0 and not cfg.enable_compaction:
         print("[compaction] update workload: forcing compaction on for the work DB")
-    elif read_only and cfg.enable_compaction:
-        print("[compaction] read-only workload: disabling compaction for measurement")
+    elif cfg.update_ratio == 0.0 and cfg.enable_compaction:
+        print("[compaction] explicit compaction run: using a temporary work DB")
     try:
         rc, text, time_info = fair.run_ycsb(
             mode="run",
@@ -496,6 +500,10 @@ def print_summary(summary: dict[str, Any]) -> None:
     print(f"cache_budget           : {summary['cache_bytes'] / GB:.3f} GiB")
     print(f"warmup_operations      : {summary['warmup_operations']}")
     print(f"measured_operations    : {summary['measured_operations']}")
+    print(f"scan_length            : {int(fnum('scan_length'))}")
+    print(f"zipfian_const          : {fnum('zipfian_const'):.4f}")
+    print(f"update_ratio           : {fnum('update_ratio'):.4f}")
+    print(f"threads                : {int(fnum('threads'))}")
     print(f"throughput             : {fnum('throughputops/sec'):.2f} ops/s")
     if "scan_count" in summary:
         if "scan_throughput_ops_sec" in summary:
@@ -587,6 +595,9 @@ def main() -> int:
     print(f"insert order for load  : random")
     print(f"request distribution   : {cfg.request_distribution}")
     print(f"zipfian_const          : {cfg.zipfian_const}")
+    print(f"scan_length            : {cfg.scan_length}")
+    print(f"update_ratio           : {cfg.update_ratio}")
+    print(f"threads                : {cfg.threads}")
     print(f"recordcount            : {dataset.recordcount}")
     print(
         f"warmup formula         : ceil({cfg.warmup_coverage} * "

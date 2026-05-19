@@ -172,11 +172,11 @@ def plot(summary: Path, figure: Path) -> None:
     variants = [v.label for v in fair.VARIANTS]
     index = {(r["case"], r["variant"]): r for r in rows}
     colors = {
-        "RocksDB": "#6D6D6D",
-        "RocksDB+LORC": "#3B6EA8",
-        "BlobDB": "#A66A2C",
-        "BlobDB+LORC": "#3D8B5B",
-        "LSbM": "#8A5EA8",
+        "RocksDB": "#E6862D",
+        "RocksDB+LORC": "#E6862D",
+        "BlobDB": "#C84C4C",
+        "BlobDB+LORC": "#C84C4C",
+        "LSbM": "#8A60B0",
     }
     hatches = {
         "RocksDB": "",

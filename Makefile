@@ -20,6 +20,7 @@ CUSTOM_ROCKSDB_LORC_PATH ?= /home/gjr/mylibs/lorcdb_${ROCKSDB_LORC_BUILD_TYPE}
 CUSTOM_TERARKDB_PATH ?= /home/gjr/mylibs/terarkdb_${TERARKDB_BUILD_TYPE}
 CUSTOM_TOPLINGDB_PATH ?= /home/gjr/mylibs/toplingdb_${TOPLINGDB_BUILD_TYPE}
 CUSTOM_TITAN_PATH ?= /home/gjr/mylibs/titan_${TITAN_BUILD_TYPE}
+CUSTOM_LSBM_PATH ?= /home/gjr/mylibs/lsbm_${LSBM_BUILD_TYPE}
 CUSTOM_LSBM_SOURCE_PATH ?= /home/gjr/projects/lsbm
 
 
@@ -71,7 +72,10 @@ endif
 
 ifeq ($(BIND_ROCKSDB_LORC), 1)
 	CXXFLAGS += -I$(CUSTOM_ROCKSDB_LORC_PATH)/include
-	LDFLAGS += -L$(CUSTOM_ROCKSDB_LORC_PATH)/lib -lrocksdb -Wl,-rpath,$(CUSTOM_ROCKSDB_LORC_PATH)/lib
+	LDFLAGS += -L$(CUSTOM_ROCKSDB_LORC_PATH)/lib -lrocksdb \
+	           -Wl,-rpath,$(CUSTOM_ROCKSDB_LORC_PATH)/lib \
+	           -Wl,--no-as-needed -lsnappy -lz -lbz2 -llz4 -lzstd \
+	           -Wl,--as-needed -ldl -lrt
     SOURCES += $(wildcard rocksdb_lorc/*.cc)
 endif
 

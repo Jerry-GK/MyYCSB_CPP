@@ -342,9 +342,9 @@ def f(row: dict[str, str | int | float], key: str, default: float = 0.0) -> floa
 def plot_entry(rows: list[dict[str, str | int | float]]) -> None:
     data = [r for r in rows if r["suite"] == "entry_baseline"]
     colors = {
-        "RocksDB": "#4E79A7",
+        "RocksDB": "#E6862D",
         "Entry range cache": "#8C6D31",
-        "LORC segment": "#3D8B5B",
+        "LORC segment": "#C84C4C",
     }
     markers = {"RocksDB": "o", "Entry range cache": "s", "LORC segment": "^"}
     plt.rcParams.update({"font.size": 8.5, "pdf.fonttype": 42, "ps.fonttype": 42})
@@ -377,7 +377,7 @@ def plot_hybrid(rows: list[dict[str, str | int | float]]) -> None:
     data = [r for r in rows if r["suite"] == "hybrid_split"]
     plt.rcParams.update({"font.size": 8.5, "pdf.fonttype": 42, "ps.fonttype": 42})
     fig, axes = plt.subplots(1, 2, figsize=(6.7, 2.35), constrained_layout=True)
-    for engine, color, label in [("rocksdb", "#F28E2B", "RocksDB+range"), ("blobdb", "#E15759", "BlobDB+range")]:
+    for engine, color, label in [("rocksdb", "#E6862D", "RocksDB+range"), ("blobdb", "#C84C4C", "BlobDB+range")]:
         subset = sorted([r for r in data if r["engine"] == engine], key=lambda r: f(r, "range_share"))
         xs = [100.0 * f(r, "range_share") for r in subset]
         tput = [f(r, "throughputops/sec") / 1000.0 for r in subset]

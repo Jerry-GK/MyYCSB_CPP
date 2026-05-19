@@ -454,9 +454,9 @@ def f(row: dict[str, str], key: str) -> float:
 
 
 COLORS = {
-    "RocksDB": "#4E79A7",
-    "BlobDB": "#59A14F",
-    "BlobDB+LORC": "#E15759",
+    "RocksDB": "#E6862D",
+    "BlobDB": "#C84C4C",
+    "BlobDB+LORC": "#C84C4C",
 }
 MARKERS = {
     "RocksDB": "o",
@@ -711,7 +711,7 @@ def cache_diagnostic(rows: list[dict[str, str]], out: Path) -> None:
     ax.plot(
         xs,
         values,
-        color="#59A14F",
+        color="#C84C4C",
         linestyle="-",
         marker="o",
         linewidth=1.55,
@@ -749,8 +749,8 @@ def lorc_hit_figure(rows: list[dict[str, str]], out: Path) -> None:
     ys = range(len(subset))
     hit_size = [100 * f(r, "lorc_hit_size_rate") for r in subset]
     full_hit = [100 * f(r, "lorc_full_hit_rate") for r in subset]
-    ax.barh([y - 0.18 for y in ys], hit_size, height=0.36, color="#E15759", label="hit records")
-    ax.barh([y + 0.18 for y in ys], full_hit, height=0.36, color="#F28E2B", label="full scans")
+    ax.barh([y - 0.18 for y in ys], hit_size, height=0.36, color="#C84C4C", label="hit records")
+    ax.barh([y + 0.18 for y in ys], full_hit, height=0.36, color="#E6862D", label="full scans")
     ax.set_xlabel("Hit rate (%)")
     ax.set_yticks(list(ys))
     ax.set_yticklabels(labels)

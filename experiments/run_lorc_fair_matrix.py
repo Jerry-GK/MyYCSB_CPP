@@ -1135,10 +1135,10 @@ def as_float(row: dict | None, key: str, default: float = float("nan")) -> float
 
 
 COLORS = {
-    "RocksDB": "#4E79A7",
-    "RocksDB+LORC": "#F28E2B",
-    "BlobDB": "#59A14F",
-    "BlobDB+LORC": "#E15759",
+    "RocksDB": "#E6862D",
+    "RocksDB+LORC": "#E6862D",
+    "BlobDB": "#C84C4C",
+    "BlobDB+LORC": "#C84C4C",
     "LSbM": "#8A60B0",
 }
 HATCHES = {
