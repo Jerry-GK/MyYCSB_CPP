@@ -554,6 +554,7 @@ def run_sweep(
     reps: int,
     python: str,
     stop_on_failure: bool,
+    all_rows: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = []
     suite_dir = run_root / suite
@@ -579,7 +580,15 @@ def run_sweep(
                     python=python,
                 )
                 rows.append(row)
+                if all_rows is not None:
+                    all_rows.append(row)
                 write_csv(suite_dir / "summary.csv", rows)
+                if all_rows is not None:
+                    write_csv(run_root / "summary.csv", all_rows)
+                    write_lorc_range_distribution(
+                        run_root / "lorc_range_distribution_median.jsonl",
+                        all_rows,
+                    )
                 plot_sweep(
                     rows,
                     suite=suite,
@@ -593,7 +602,12 @@ def run_sweep(
     return rows
 
 
-def run_scan_length_sweep(args: argparse.Namespace, base: dict[str, Any], run_root: Path) -> list[dict[str, Any]]:
+def run_scan_length_sweep(
+    args: argparse.Namespace,
+    base: dict[str, Any],
+    run_root: Path,
+    all_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     values = parse_csv_list(args.scan_lengths, int)
     labels = [str(v) for v in values]
     return run_sweep(
@@ -609,10 +623,16 @@ def run_scan_length_sweep(args: argparse.Namespace, base: dict[str, Any], run_ro
         reps=args.reps,
         python=args.python,
         stop_on_failure=args.stop_on_failure,
+        all_rows=all_rows,
     )
 
 
-def run_zipfian_sweep(args: argparse.Namespace, base: dict[str, Any], run_root: Path) -> list[dict[str, Any]]:
+def run_zipfian_sweep(
+    args: argparse.Namespace,
+    base: dict[str, Any],
+    run_root: Path,
+    all_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     values = parse_csv_list(args.zipfian_values, float)
     labels = [f"{v:g}" for v in values]
     return run_sweep(
@@ -628,10 +648,16 @@ def run_zipfian_sweep(args: argparse.Namespace, base: dict[str, Any], run_root: 
         reps=args.reps,
         python=args.python,
         stop_on_failure=args.stop_on_failure,
+        all_rows=all_rows,
     )
 
 
-def run_value_size_sweep(args: argparse.Namespace, base: dict[str, Any], run_root: Path) -> list[dict[str, Any]]:
+def run_value_size_sweep(
+    args: argparse.Namespace,
+    base: dict[str, Any],
+    run_root: Path,
+    all_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     values = parse_csv_list(args.value_sizes, int)
     labels = [value_size_label(v) for v in values]
     return run_sweep(
@@ -647,10 +673,16 @@ def run_value_size_sweep(args: argparse.Namespace, base: dict[str, Any], run_roo
         reps=args.reps,
         python=args.python,
         stop_on_failure=args.stop_on_failure,
+        all_rows=all_rows,
     )
 
 
-def run_thread_sweep(args: argparse.Namespace, base: dict[str, Any], run_root: Path) -> list[dict[str, Any]]:
+def run_thread_sweep(
+    args: argparse.Namespace,
+    base: dict[str, Any],
+    run_root: Path,
+    all_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     values = parse_csv_list(args.thread_values, int)
     labels = [str(v) for v in values]
     return run_sweep(
@@ -666,10 +698,16 @@ def run_thread_sweep(args: argparse.Namespace, base: dict[str, Any], run_root: P
         reps=args.reps,
         python=args.python,
         stop_on_failure=args.stop_on_failure,
+        all_rows=all_rows,
     )
 
 
-def run_update_ratio_sweep(args: argparse.Namespace, base: dict[str, Any], run_root: Path) -> list[dict[str, Any]]:
+def run_update_ratio_sweep(
+    args: argparse.Namespace,
+    base: dict[str, Any],
+    run_root: Path,
+    all_rows: list[dict[str, Any]] | None = None,
+) -> list[dict[str, Any]]:
     values = parse_csv_list(args.update_ratios, float)
     labels = [f"{int(round(v * 100))}%" for v in values]
     return run_sweep(
@@ -685,6 +723,7 @@ def run_update_ratio_sweep(args: argparse.Namespace, base: dict[str, Any], run_r
         reps=args.reps,
         python=args.python,
         stop_on_failure=args.stop_on_failure,
+        all_rows=all_rows,
     )
 
 
@@ -748,8 +787,7 @@ def main() -> int:
     }
     for suite in args.suites:
         fn = func_by_name[suite]
-        rows = fn(args, base, run_root)
-        all_rows.extend(rows)
+        fn(args, base, run_root, all_rows)
         write_csv(run_root / "summary.csv", all_rows)
         write_lorc_range_distribution(
             run_root / "lorc_range_distribution_median.jsonl", all_rows
