@@ -201,7 +201,8 @@ def parse_lorc_range_distribution(run_log: Path) -> dict[str, float | str]:
 def median_lorc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
     for row in rows:
-        if int(row.get("returncode", 1) or 1) != 0:
+        returncode = row.get("returncode", 1)
+        if returncode is None or int(returncode) != 0:
             continue
         system_key = str(row.get("system_key", ""))
         if "lorc" not in system_key:
