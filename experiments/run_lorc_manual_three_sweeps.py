@@ -538,6 +538,10 @@ def run_one_point(
             f"log={point_dir / 'driver.log'}",
             flush=True,
         )
+    print(
+        f"[case finished at] {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}",
+        flush=True,
+    )
     return row
 
 
