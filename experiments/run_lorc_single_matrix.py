@@ -29,6 +29,13 @@ OUT_ROOT = ROOT / "result" / "single_matrix"
 
 SYSTEMS = ["rocksdb", "rocksdb_lorc", "blobdb", "blobdb_lorc", "lsbm"]
 LORC_SYSTEMS = ["rocksdb_lorc", "blobdb_lorc"]
+SYSTEM_ENGINES = {
+    "rocksdb": "rocksdb",
+    "rocksdb_lorc": "rocksdb",
+    "blobdb": "blobdb",
+    "blobdb_lorc": "blobdb",
+    "lsbm": "lsbm",
+}
 
 
 @dataclass(frozen=True)
@@ -52,7 +59,7 @@ class Point:
 def load_base(path: Path) -> dict[str, Any]:
     cfg = json.loads(path.read_text())
     cfg["build_source"] = False
-    cfg["enable_compaction"] = True
+    cfg["enable_compaction"] = False
     cfg["directio"] = False
     return cfg
 
@@ -71,7 +78,7 @@ def make_point(
     cfg.update(overrides)
     cfg["system"] = system
     cfg["build_source"] = bool(overrides.get("build_source", False))
-    cfg["enable_compaction"] = True
+    cfg["enable_compaction"] = float(cfg.get("update_ratio", 0.0)) > 0.0
     return Point(
         suite=suite,
         x_value=str(x_value),
@@ -82,19 +89,27 @@ def make_point(
     )
 
 
-def build_points(base: dict[str, Any], suites: set[str], reps: int) -> list[Point]:
+def build_points(
+    base: dict[str, Any],
+    suites: set[str],
+    reps: int,
+    systems: list[str],
+) -> list[Point]:
     points: list[Point] = []
+    selected_systems = systems
+    lru_systems = [system for system in systems if system in LORC_SYSTEMS]
 
     def add_for_systems(
         suite: str,
         x_value: Any,
         *,
         x_label: str | None = None,
-        systems: list[str] = SYSTEMS,
+        systems: list[str] | None = None,
         **overrides: Any,
     ) -> None:
+        point_systems = systems if systems is not None else selected_systems
         for rep in range(1, reps + 1):
-            for system in systems:
+            for system in point_systems:
                 points.append(
                     make_point(
                         base,
@@ -137,7 +152,7 @@ def build_points(base: dict[str, Any], suites: set[str], reps: int) -> list[Poin
                 "lru_policy",
                 value,
                 x_label=label,
-                systems=LORC_SYSTEMS,
+                systems=lru_systems,
                 lru_policy=value,
             )
 
@@ -203,6 +218,16 @@ def run_point(point: Point, run_root: Path, force: bool) -> dict[str, Any]:
     return summary
 
 
+def source_key(point: Point) -> tuple[Any, ...]:
+    cfg = point.cfg
+    return (
+        SYSTEM_ENGINES[point.system],
+        cfg.get("total_data_gb", 4.0),
+        cfg.get("key_size", 24),
+        cfg.get("value_size", 1024),
+    )
+
+
 def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
     keys: list[str] = []
     preferred = [
@@ -211,9 +236,11 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         "scan_count", "scan_avg_us", "scan_p99_us", "update_count",
         "update_avg_us", "update_p99_us", "max_rss_kb", "fs_inputs",
         "fs_outputs", "lorc_full_hit_rate", "lorc_hit_size_rate",
+        "lorc_physical_range_count", "lorc_logical_range_count",
+        "lorc_total_range_length", "lorc_current_size",
         "scan_length", "value_size", "zipfian_const", "cache_bytes",
         "update_ratio", "threads", "lru_policy", "warmup_operations",
-        "measured_operations", "output_dir", "error",
+        "point_expansion_entries", "measured_operations", "output_dir", "error",
     ]
     for key in preferred:
         if any(key in row for row in rows):
@@ -242,6 +269,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--run-id", default=None)
     parser.add_argument("--jobs", type=int, default=1)
     parser.add_argument("--reps", type=int, default=1)
+    parser.add_argument(
+        "--systems",
+        default=",".join(SYSTEMS),
+        help=(
+            "Comma-separated systems to run: rocksdb,rocksdb_lorc,"
+            "blobdb,blobdb_lorc,lsbm"
+        ),
+    )
     parser.add_argument("--force", action="store_true")
     return parser.parse_args()
 
@@ -256,24 +291,47 @@ def main() -> int:
         }
     else:
         suites = {s.strip() for s in args.suites.split(",") if s.strip()}
+    systems = [s.strip() for s in args.systems.split(",") if s.strip()]
+    invalid_systems = [s for s in systems if s not in SYSTEMS]
+    if invalid_systems:
+        raise SystemExit(f"unknown systems: {','.join(invalid_systems)}")
     run_id = args.run_id or datetime.now().strftime("%Y%m%d_%H%M%S")
     run_root = OUT_ROOT / run_id
     run_root.mkdir(parents=True, exist_ok=True)
 
-    points = build_points(base, suites=suites, reps=args.reps)
+    points = build_points(base, suites=suites, reps=args.reps, systems=systems)
     (run_root / "matrix_points.json").write_text(
         json.dumps([p.__dict__ | {"cfg": p.cfg} for p in points], indent=2)
     )
     print(f"[matrix] run_root={run_root}")
-    print(f"[matrix] suites={','.join(sorted(suites))} points={len(points)} jobs={args.jobs}")
+    print(f"[matrix] suites={','.join(sorted(suites))} systems={','.join(systems)} points={len(points)} jobs={args.jobs}")
 
     rows: list[dict[str, Any]] = []
     if args.jobs <= 1:
+        built_sources: set[tuple[Any, ...]] = set()
         for idx, point in enumerate(points, 1):
+            if point.cfg.get("build_source", False):
+                key = source_key(point)
+                if key in built_sources:
+                    point = Point(
+                        suite=point.suite,
+                        x_value=point.x_value,
+                        x_label=point.x_label,
+                        system=point.system,
+                        cfg={**point.cfg, "build_source": False},
+                        rep=point.rep,
+                    )
+                else:
+                    built_sources.add(key)
             print(f"[matrix] {idx}/{len(points)} {point.name}")
             rows.append(run_point(point, run_root, args.force))
             write_csv(run_root / "summary.csv", rows)
     else:
+        if any(point.cfg.get("build_source", False) for point in points):
+            raise SystemExit(
+                "--jobs > 1 is disabled for suites that build source databases; "
+                "run sequentially so each shared source is loaded once"
+            )
         with ThreadPoolExecutor(max_workers=args.jobs) as executor:
             futs = {
                 executor.submit(run_point, point, run_root, args.force): point

@@ -60,16 +60,16 @@ class SingleConfig:
     update_ratio: float
     threads: int
     lru_policy: str
+    point_expansion_entries: int
     build_source: bool
     enable_compaction: bool
     system: str
     directio: bool
     measured_operations: int
     warmup_coverage: float
-    min_warmup_operations: int
-    max_warmup_operations: int
     request_distribution: str
     output_dir: str | None
+    source_path_override: str | None
 
 
 def load_config(path: Path) -> SingleConfig:
@@ -84,16 +84,16 @@ def load_config(path: Path) -> SingleConfig:
         update_ratio=float(raw.get("update_ratio", 0.0)),
         threads=int(raw.get("threads", 1)),
         lru_policy=str(raw.get("lru_policy", "boundary_lru")),
+        point_expansion_entries=int(raw.get("point_expansion_entries", 64)),
         build_source=bool(raw.get("build_source", True)),
         enable_compaction=bool(raw.get("enable_compaction", False)),
         system=str(raw.get("system", "rocksdb_lorc")),
         directio=bool(raw.get("directio", False)),
         measured_operations=int(raw.get("measured_operations", 30_000)),
         warmup_coverage=float(raw.get("warmup_coverage", 4.0)),
-        min_warmup_operations=int(raw.get("min_warmup_operations", 20_000)),
-        max_warmup_operations=int(raw.get("max_warmup_operations", 1_000_000)),
         request_distribution=str(raw.get("request_distribution", "orderedzipfian")),
         output_dir=raw.get("output_dir"),
+        source_path_override=raw.get("source_path_override"),
     )
     validate_config(cfg)
     return cfg
@@ -116,6 +116,8 @@ def validate_config(cfg: SingleConfig) -> None:
         raise ValueError("threads must be positive")
     if cfg.lru_policy not in VALID_LRU:
         raise ValueError(f"lru_policy must be one of {sorted(VALID_LRU)}")
+    if cfg.point_expansion_entries < 0:
+        raise ValueError("point_expansion_entries must be non-negative")
     if cfg.measured_operations <= 0:
         raise ValueError("measured_operations must be positive")
     if cfg.warmup_coverage < 0:
@@ -178,13 +180,9 @@ def dataset_for(cfg: SingleConfig) -> fair.Dataset:
 
 
 def warmup_ops_for(cfg: SingleConfig) -> int:
-    cache_records = max(1, cache_bytes(cfg) // (cfg.key_size + cfg.value_size))
-    coverage_ops = math.ceil(
-        cfg.warmup_coverage * cache_records / max(cfg.scan_length, 1)
-    )
-    return min(
-        cfg.max_warmup_operations,
-        max(cfg.min_warmup_operations, coverage_ops),
+    dataset_records = record_count(cfg)
+    return math.ceil(
+        cfg.warmup_coverage * dataset_records / max(cfg.scan_length, 1)
     )
 
 
@@ -264,7 +262,9 @@ def system_props(cfg: SingleConfig, variant: fair.Variant) -> dict[str, str]:
     )
     if variant.lorc:
         props["rocksdb.range_cache_victim_policy"] = cfg.lru_policy
-        props["rocksdb.lorc_point_expansion_entries"] = "0"
+        props["rocksdb.lorc_point_expansion_entries"] = str(
+            cfg.point_expansion_entries
+        )
     if variant.label == "BlobDB+LORC" and cfg.value_size < 512:
         props["rocksdb.lorc_value_separation_aware"] = "false"
         props["rocksdb.lorc_bypass_lower_cache_on_refill"] = "false"
@@ -278,7 +278,10 @@ def system_props(cfg: SingleConfig, variant: fair.Variant) -> dict[str, str]:
 
 def run_props(cfg: SingleConfig, variant: fair.Variant, read_only: bool) -> dict[str, str]:
     props = system_props(cfg, variant)
-    compaction_required = cfg.enable_compaction or cfg.update_ratio > 0.0
+    # Read-only scan experiments must not let background compaction pollute
+    # latency or perf profiles.  Foreground-update workloads are the only
+    # measured runs that require compaction to stay enabled.
+    compaction_required = cfg.update_ratio > 0.0
     if variant.engine == "lsbm":
         props.update(
             {
@@ -330,11 +333,13 @@ def load_props(cfg: SingleConfig, variant: fair.Variant) -> dict[str, str]:
 
 
 def random_seed(cfg: SingleConfig, phase: str) -> int:
+    # The request stream must be identical across systems, cache sizes, and
+    # replacement policies for an apples-to-apples comparison.  Keep only the
+    # data/workload shape in the seed.
     key = (
-        f"{phase}|{canonical_system(cfg.system)}|{cfg.total_data_gb}|"
-        f"{cfg.cache_data_gb}|{cfg.key_size}|{cfg.value_size}|"
+        f"{phase}|{cfg.total_data_gb}|{cfg.key_size}|{cfg.value_size}|"
         f"{cfg.scan_length}|{cfg.zipfian_const}|{cfg.update_ratio}|"
-        f"{cfg.threads}|{cfg.lru_policy}|{cfg.directio}"
+        f"{cfg.threads}|{cfg.request_distribution}"
     )
     return 1 + (zlib.crc32(key.encode("utf-8")) % 2_000_000_000)
 
@@ -398,7 +403,7 @@ def run_measurement(
         )
     )
 
-    read_only = (cfg.update_ratio == 0.0 and not cfg.enable_compaction)
+    read_only = (cfg.update_ratio == 0.0)
     db_path = source_path
     work_db: Path | None = None
     if not read_only:
@@ -411,6 +416,8 @@ def run_measurement(
     props = run_props(cfg, variant, read_only=read_only)
     if cfg.update_ratio > 0 and not cfg.enable_compaction:
         print("[compaction] update workload: forcing compaction on for the work DB")
+    elif read_only and cfg.enable_compaction:
+        print("[compaction] read-only workload: disabling compaction for measurement")
     try:
         rc, text, time_info = fair.run_ycsb(
             mode="run",
@@ -460,6 +467,7 @@ def run_measurement(
             "scan_ratio": 1.0 - cfg.update_ratio,
             "threads": cfg.threads,
             "lru_policy": cfg.lru_policy,
+            "point_expansion_entries": cfg.point_expansion_entries,
             "directio": cfg.directio,
             "enable_compaction": cfg.enable_compaction,
             "request_distribution": cfg.request_distribution,
@@ -520,6 +528,12 @@ def print_summary(summary: dict[str, Any]) -> None:
             f"full={fnum('lorc_full_hit_rate'):.4f}, "
             f"size={fnum('lorc_hit_size_rate'):.4f}"
         )
+    if "lorc_physical_range_count" in summary:
+        print(
+            "LORC range counts      : "
+            f"physical={int(fnum('lorc_physical_range_count'))}, "
+            f"logical={int(fnum('lorc_logical_range_count'))}"
+        )
     print(f"run_log                : {summary['run_log']}")
 
 
@@ -549,7 +563,11 @@ def main() -> int:
 
     variant = variant_for(cfg)
     dataset = dataset_for(cfg)
-    source_path = dataset.source_path(variant.engine)
+    source_path = (
+        Path(cfg.source_path_override)
+        if cfg.source_path_override
+        else dataset.source_path(variant.engine)
+    )
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     out_dir = (
         Path(cfg.output_dir)
@@ -572,9 +590,12 @@ def main() -> int:
     print(f"recordcount            : {dataset.recordcount}")
     print(
         f"warmup formula         : ceil({cfg.warmup_coverage} * "
-        f"cache_records / scan_length), cache_records="
-        f"{cache_bytes(cfg) // (cfg.key_size + cfg.value_size)}"
+        f"recordcount / scan_length), recordcount={dataset.recordcount}"
     )
+    warmup_ops = warmup_ops_for(cfg)
+    print(f"warmup_operations      : {warmup_ops}")
+    print(f"measured_operations    : {cfg.measured_operations}")
+    print(f"total_operations       : {warmup_ops + cfg.measured_operations}")
 
     if cfg.build_source or not source_path.exists():
         run_load(cfg=cfg, dataset=dataset, source_path=source_path, out_dir=out_dir)

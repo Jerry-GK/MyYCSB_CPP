@@ -13,6 +13,8 @@
 #include <string>
 #include <atomic>
 #include <memory>
+#include <thread>
+#include <unistd.h>
 
 #include "db.h"
 #include "core_workload.h"
@@ -64,7 +66,8 @@ inline int ClientThreadWithWarmup(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const 
                                   utils::Timer<double> *measurement_timer,
                                   utils::CountDownLatch *measurement_latch,
                                   const int warmup_ops, utils::RateLimiter *rlim,
-                                  bool enable_l1d_perf, int thread_id) {
+                                  bool enable_l1d_perf, int thread_id,
+                                  int sleep_after_warmup_sec) {
 
   try {
     if (init_db) {
@@ -90,6 +93,13 @@ inline int ClientThreadWithWarmup(ycsbc::DB *db, ycsbc::CoreWorkload *wl, const 
         // Only one thread should start the measurement timer
         bool expected = false;
         if (measurement_started->compare_exchange_strong(expected, true)) {
+          if (sleep_after_warmup_sec > 0) {
+            std::cout << "Measurement starts after "
+                      << sleep_after_warmup_sec
+                      << " sec sleep; pid=" << getpid() << std::endl;
+            std::this_thread::sleep_for(
+                std::chrono::seconds(sleep_after_warmup_sec));
+          }
           measurement_timer->Start();
         }
         if (l1d_counters) {

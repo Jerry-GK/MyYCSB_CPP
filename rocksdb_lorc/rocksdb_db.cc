@@ -340,9 +340,16 @@ void RocksdbDB::Cleanup() {
               << " current_size=" << range_cache->getCurrentSize()
               << " capacity=" << range_cache->getCapacity()
               << " total_range_length=" << range_cache->getTotalRangeLength()
+              << " physical_range_count=" << range_cache->physicalRangeCount()
+              << " logical_range_count=" << range_cache->logicalRangeCount()
               << " materialized_entries=" << range_cache->totalMaterializedEntries()
               << " materialized_key_bytes=" << range_cache->totalMaterializedKeyBytes()
               << " materialized_value_bytes=" << range_cache->totalMaterializedValueBytes()
+              << " refill_insert_ranges=" << range_cache->refillInsertRanges()
+              << " refill_left_concat_ranges=" << range_cache->refillLeftConcatRanges()
+              << " refill_right_concat_ranges=" << range_cache->refillRightConcatRanges()
+              << " refill_both_concat_ranges=" << range_cache->refillBothConcatRanges()
+              << " refill_empty_concat_ranges=" << range_cache->refillEmptyConcatRanges()
               << " full_hit_rate=" << range_cache->fullHitRate()
               << " hit_size_rate=" << range_cache->hitSizeRate()
               << " put_range_num=" << range_cache->getCacheStatistic().getPutRangeNum()
@@ -356,6 +363,10 @@ void RocksdbDB::Cleanup() {
               << " value_payload_demotion_entries=" << range_cache->valuePayloadDemotionEntries()
               << " value_payload_demotion_bytes=" << range_cache->valuePayloadDemotionBytes()
               << std::endl;
+    const std::string logical_sample = range_cache->logicalRangeDebugSample(8);
+    if (!logical_sample.empty()) {
+      std::cout << "[LORC_RANGE_SAMPLE] " << logical_sample << std::endl;
+    }
   }
   if (rocksdb_stats) {
     std::cout << "[ROCKSDB_STATS]";

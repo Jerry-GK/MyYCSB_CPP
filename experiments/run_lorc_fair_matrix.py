@@ -24,6 +24,7 @@ import shutil
 import statistics
 import subprocess
 import sys
+import time
 import zlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -186,9 +187,9 @@ def system_props(variant: Variant, budget: int, *, direct_reads: str) -> dict[st
     }
     if variant.label == "BlobDB+LORC":
         props.update({
-            "rocksdb.lorc_value_separation_aware": "true",
             "rocksdb.lorc_bypass_lower_cache_on_refill": "true",
-            "rocksdb.lorc_min_materialized_value_bytes": "512",
+            "rocksdb.lorc_value_separation_aware": "false",
+            "rocksdb.lorc_min_materialized_value_bytes": "0",
         })
     return props
 
@@ -478,18 +479,41 @@ def run_ycsb(
     env = os.environ.copy()
     if random_seed is not None:
         env["YCSB_RANDOM_SEED"] = str(random_seed)
-    proc = subprocess.run(
+    proc = subprocess.Popen(
         cmd,
         cwd=ROOT,
         env=env,
         text=True,
         stdout=subprocess.PIPE,
         stderr=subprocess.STDOUT,
-        timeout=timeout,
+        bufsize=1,
     )
+    output_lines: list[str] = []
+    deadline = time.monotonic() + timeout
+    timed_out = False
+    assert proc.stdout is not None
+    try:
+        for line in proc.stdout:
+            print(line, end="", flush=True)
+            output_lines.append(line)
+            if time.monotonic() > deadline:
+                timed_out = True
+                proc.kill()
+                break
+        if timed_out:
+            proc.wait(timeout=5)
+        else:
+            proc.wait()
+    finally:
+        try:
+            proc.stdout.close()
+        except Exception:
+            pass
+    if timed_out:
+        output_lines.append(f"\nERROR: timed out after {timeout} seconds\n")
     text = (
         "\n".join(header)
-        + proc.stdout
+        + "".join(output_lines)
         + f"\n===== END {log_name} rc={proc.returncode} "
         + f"{datetime.now(timezone.utc).isoformat()} =====\n"
     )

@@ -8,14 +8,13 @@
   "update_ratio": 0.0,
   "threads": 1,
   "lru_policy": "boundary_lru",
+  "point_expansion_entries": 0,
   "build_source": false,
-  "enable_compaction": true,
+  "enable_compaction": false,
   "system": "rocksdb_lorc",
   "directio": false,
   "measured_operations": 1000000,
-  "warmup_coverage": 4.0,
-  "min_warmup_operations": 20000,
-  "max_warmup_operations": 1000000,
+  "warmup_coverage": 8.0,
   "request_distribution": "orderedzipfian",
   "output_dir": null
 }
