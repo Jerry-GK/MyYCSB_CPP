@@ -17,6 +17,7 @@ import csv
 import json
 import math
 import os
+import re
 import subprocess
 import sys
 from dataclasses import dataclass
@@ -56,6 +57,9 @@ SYSTEM_HATCHES = {
     "blobdb_lorc": "///",
     "lsbm": "",
 }
+
+LORC_STATS_RE = re.compile(r"\[LORC_STATS\]\s+(?P<body>.*)")
+LORC_RANGE_SAMPLE_RE = re.compile(r"\[LORC_RANGE_SAMPLE\]\s+(?P<body>.*)")
 
 SWEEP_FUNCS = {
     "scan_length": "run_scan_length_sweep",
@@ -147,6 +151,137 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer = csv.DictWriter(f, fieldnames=keys, extrasaction="ignore")
         writer.writeheader()
         writer.writerows(rows)
+
+
+def parse_lorc_kv_body(body: str) -> dict[str, float | str]:
+    parsed: dict[str, float | str] = {}
+    for token in body.split():
+        if "=" not in token:
+            continue
+        key, value = token.split("=", 1)
+        try:
+            parsed[key] = float(value)
+        except ValueError:
+            parsed[key] = value
+    return parsed
+
+
+def parse_lorc_range_distribution(run_log: Path) -> dict[str, float | str]:
+    if not run_log.exists():
+        return {}
+    text = run_log.read_text(errors="replace")
+    stats_matches = list(LORC_STATS_RE.finditer(text))
+    if not stats_matches:
+        return {}
+    stats = parse_lorc_kv_body(stats_matches[-1].group("body"))
+    sample_matches = list(LORC_RANGE_SAMPLE_RE.finditer(text))
+    sample = (
+        parse_lorc_kv_body(sample_matches[-1].group("body"))
+        if sample_matches
+        else {}
+    )
+
+    physical_count = float(stats.get("physical_range_count", 0.0) or 0.0)
+    logical_count = float(stats.get("logical_range_count", 0.0) or 0.0)
+    total_length = float(stats.get("total_range_length", 0.0) or 0.0)
+    avg_physical = total_length / physical_count if physical_count > 0 else 0.0
+    avg_logical = float(sample.get("avg_len", 0.0) or 0.0)
+    if avg_logical == 0.0 and logical_count > 0:
+        avg_logical = total_length / logical_count
+
+    return {
+        "lorc_logical_range_count": logical_count,
+        "lorc_avg_logical_range_length": avg_logical,
+        "lorc_physical_range_count": physical_count,
+        "lorc_avg_physical_range_length": avg_physical,
+        "lorc_total_range_length": total_length,
+    }
+
+
+def median_lorc_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    groups: dict[tuple[str, str, str], list[dict[str, Any]]] = {}
+    for row in rows:
+        if int(row.get("returncode", 1) or 1) != 0:
+            continue
+        system_key = str(row.get("system_key", ""))
+        if "lorc" not in system_key:
+            continue
+        if "scan_throughput_ops_sec" not in row:
+            continue
+        key = (
+            str(row.get("suite", "")),
+            str(row.get("x_label", "")),
+            system_key,
+        )
+        groups.setdefault(key, []).append(row)
+
+    selected: list[dict[str, Any]] = []
+    for group_rows in groups.values():
+        values = sorted(float(r.get("scan_throughput_ops_sec", 0.0) or 0.0)
+                        for r in group_rows)
+        if not values:
+            continue
+        mid = len(values) // 2
+        if len(values) % 2:
+            median_value = values[mid]
+        else:
+            median_value = (values[mid - 1] + values[mid]) / 2.0
+        selected.append(
+            min(
+                group_rows,
+                key=lambda r: (
+                    abs(float(r.get("scan_throughput_ops_sec", 0.0) or 0.0)
+                        - median_value),
+                    int(r.get("rep", 0) or 0),
+                ),
+            )
+        )
+
+    return sorted(
+        selected,
+        key=lambda r: (
+            str(r.get("suite", "")),
+            float(r.get("x_order", 0.0) or 0.0),
+            str(r.get("system_key", "")),
+        ),
+    )
+
+
+def write_lorc_range_distribution(path: Path, rows: list[dict[str, Any]]) -> None:
+    records: list[dict[str, Any]] = []
+    for row in median_lorc_rows(rows):
+        run_log = Path(str(row.get("run_log") or ""))
+        distribution = parse_lorc_range_distribution(run_log)
+        if not distribution:
+            continue
+        record = {
+            "suite": row.get("suite"),
+            "knob": row.get("knob"),
+            "x_value": row.get("x_value"),
+            "x_label": row.get("x_label"),
+            "system_key": row.get("system_key"),
+            "system": row.get("system"),
+            "rep": row.get("rep"),
+            "scan_length": row.get("scan_length"),
+            "value_size": row.get("value_size"),
+            "zipfian_const": row.get("zipfian_const"),
+            "cache_bytes": row.get("cache_bytes"),
+            "update_ratio": row.get("update_ratio"),
+            "threads": row.get("threads"),
+            "lru_policy": row.get("lru_policy"),
+            "scan_throughput_ops_sec": row.get("scan_throughput_ops_sec"),
+            "scan_p99_us": row.get("scan_p99_us"),
+            "run_log": str(run_log),
+        }
+        record.update(distribution)
+        records.append(record)
+
+    if records:
+        path.write_text(
+            "".join(json.dumps(r, sort_keys=True) + "\n" for r in records)
+        )
+    elif path.exists():
+        path.unlink()
 
 
 def print_rule(title: str, char: str = "=") -> None:
@@ -616,7 +751,13 @@ def main() -> int:
         rows = fn(args, base, run_root)
         all_rows.extend(rows)
         write_csv(run_root / "summary.csv", all_rows)
+        write_lorc_range_distribution(
+            run_root / "lorc_range_distribution_median.jsonl", all_rows
+        )
     print(f"[SUMMARY] {run_root / 'summary.csv'}", flush=True)
+    range_path = run_root / "lorc_range_distribution_median.jsonl"
+    if range_path.exists():
+        print(f"[LORC_RANGE_DISTRIBUTION] {range_path}", flush=True)
     return 0
 
 
