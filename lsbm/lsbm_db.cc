@@ -14,6 +14,8 @@
 #include <leveldb/options.h>
 #include <leveldb/write_batch.h>
 
+#include <atomic>
+#include <iostream>
 #include <sstream>
 
 namespace leveldb {
@@ -79,6 +81,9 @@ namespace {
       "leveldb.compaction_buffer_use_length";
   const std::string PROP_COMPACTION_BUFFER_USE_LENGTH_DEFAULT = "";
 
+  const std::string PROP_SCAN_DIAGNOSTICS = "leveldb.scan_diagnostics";
+  const std::string PROP_SCAN_DIAGNOSTICS_DEFAULT = "false";
+
   bool IsTrue(const std::string &value) {
     return value == "true" || value == "1" || value == "yes";
   }
@@ -88,6 +93,12 @@ namespace {
 namespace ycsbc {
 
 namespace {
+std::atomic<bool> g_scan_diagnostics{false};
+std::atomic<uint64_t> g_scan_calls{0};
+std::atomic<uint64_t> g_scan_rows{0};
+std::atomic<uint64_t> g_scan_value_bytes{0};
+std::atomic<uint64_t> g_scan_fields{0};
+
 void ApplyLsbmRuntimeOptions(const utils::Properties &props) {
   leveldb::config::run_compaction =
       IsTrue(props.GetProperty(PROP_RUN_COMPACTION,
@@ -157,6 +168,16 @@ void LeveldbDB::Init() {
                                             CoreWorkload::FIELD_COUNT_DEFAULT));
   field_prefix_ = props.GetProperty(CoreWorkload::FIELD_NAME_PREFIX,
                                     CoreWorkload::FIELD_NAME_PREFIX_DEFAULT);
+  g_scan_diagnostics.store(
+      IsTrue(props.GetProperty(PROP_SCAN_DIAGNOSTICS,
+                               PROP_SCAN_DIAGNOSTICS_DEFAULT)),
+      std::memory_order_relaxed);
+  if (g_scan_diagnostics.load(std::memory_order_relaxed)) {
+    g_scan_calls.store(0, std::memory_order_relaxed);
+    g_scan_rows.store(0, std::memory_order_relaxed);
+    g_scan_value_bytes.store(0, std::memory_order_relaxed);
+    g_scan_fields.store(0, std::memory_order_relaxed);
+  }
 
   ref_cnt_++;
   if (db_) {
@@ -192,7 +213,16 @@ void LeveldbDB::Cleanup() {
   if (--ref_cnt_) {
     return;
   }
+  if (g_scan_diagnostics.load(std::memory_order_relaxed)) {
+    std::cerr << "[LSBM_SCAN_DIAGNOSTICS]"
+              << " scan_calls=" << g_scan_calls.load(std::memory_order_relaxed)
+              << " rows=" << g_scan_rows.load(std::memory_order_relaxed)
+              << " value_bytes=" << g_scan_value_bytes.load(std::memory_order_relaxed)
+              << " fields=" << g_scan_fields.load(std::memory_order_relaxed)
+              << std::endl;
+  }
   delete db_;
+  db_ = nullptr;
 }
 
 void LeveldbDB::GetOptions(const utils::Properties &props, leveldb::Options *opt) {
@@ -341,8 +371,12 @@ DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, const std::strin
                                       std::vector<std::vector<Field>> &result) {
   leveldb::Iterator *db_iter = db_->NewIterator(leveldb::ReadOptions());
   db_iter->Seek(key);
+  uint64_t returned_rows = 0;
+  uint64_t returned_bytes = 0;
+  uint64_t returned_fields = 0;
   for (int i = 0; db_iter->Valid() && i < len; i++) {
     std::string data = db_iter->value().ToString();
+    returned_bytes += data.size();
     result.push_back(std::vector<Field>());
     std::vector<Field> &values = result.back();
     if (fields != nullptr) {
@@ -350,7 +384,15 @@ DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, const std::strin
     } else {
       DeserializeRow(&values, data);
     }
+    returned_fields += values.size();
+    ++returned_rows;
     db_iter->Next();
+  }
+  if (g_scan_diagnostics.load(std::memory_order_relaxed)) {
+    g_scan_calls.fetch_add(1, std::memory_order_relaxed);
+    g_scan_rows.fetch_add(returned_rows, std::memory_order_relaxed);
+    g_scan_value_bytes.fetch_add(returned_bytes, std::memory_order_relaxed);
+    g_scan_fields.fetch_add(returned_fields, std::memory_order_relaxed);
   }
   delete db_iter;
   return kOK;
