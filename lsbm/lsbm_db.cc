@@ -83,6 +83,9 @@ namespace {
 
   const std::string PROP_SCAN_DIAGNOSTICS = "leveldb.scan_diagnostics";
   const std::string PROP_SCAN_DIAGNOSTICS_DEFAULT = "false";
+  const std::string PROP_SCAN_DIAGNOSTIC_SAMPLES =
+      "leveldb.scan_diagnostic_samples";
+  const std::string PROP_SCAN_DIAGNOSTIC_SAMPLES_DEFAULT = "0";
 
   bool IsTrue(const std::string &value) {
     return value == "true" || value == "1" || value == "yes";
@@ -98,6 +101,28 @@ std::atomic<uint64_t> g_scan_calls{0};
 std::atomic<uint64_t> g_scan_rows{0};
 std::atomic<uint64_t> g_scan_value_bytes{0};
 std::atomic<uint64_t> g_scan_fields{0};
+std::atomic<uint64_t> g_scan_short_results{0};
+std::atomic<uint64_t> g_scan_first_key_mismatches{0};
+std::atomic<uint64_t> g_scan_nonconsecutive_keys{0};
+std::atomic<uint64_t> g_scan_diagnostic_samples_left{0};
+
+bool ParseYcsbUserKey(const std::string& key, uint64_t* parsed) {
+  static constexpr const char* kPrefix = "user";
+  static constexpr size_t kPrefixLen = 4;
+  if (key.size() <= kPrefixLen || key.compare(0, kPrefixLen, kPrefix) != 0) {
+    return false;
+  }
+  uint64_t value = 0;
+  for (size_t i = kPrefixLen; i < key.size(); ++i) {
+    const char c = key[i];
+    if (c < '0' || c > '9') {
+      return false;
+    }
+    value = value * 10 + static_cast<uint64_t>(c - '0');
+  }
+  *parsed = value;
+  return true;
+}
 
 void ApplyLsbmRuntimeOptions(const utils::Properties &props) {
   leveldb::config::run_compaction =
@@ -177,6 +202,14 @@ void LeveldbDB::Init() {
     g_scan_rows.store(0, std::memory_order_relaxed);
     g_scan_value_bytes.store(0, std::memory_order_relaxed);
     g_scan_fields.store(0, std::memory_order_relaxed);
+    g_scan_short_results.store(0, std::memory_order_relaxed);
+    g_scan_first_key_mismatches.store(0, std::memory_order_relaxed);
+    g_scan_nonconsecutive_keys.store(0, std::memory_order_relaxed);
+    g_scan_diagnostic_samples_left.store(
+        static_cast<uint64_t>(std::stoull(
+            props.GetProperty(PROP_SCAN_DIAGNOSTIC_SAMPLES,
+                              PROP_SCAN_DIAGNOSTIC_SAMPLES_DEFAULT))),
+        std::memory_order_relaxed);
   }
 
   ref_cnt_++;
@@ -219,6 +252,9 @@ void LeveldbDB::Cleanup() {
               << " rows=" << g_scan_rows.load(std::memory_order_relaxed)
               << " value_bytes=" << g_scan_value_bytes.load(std::memory_order_relaxed)
               << " fields=" << g_scan_fields.load(std::memory_order_relaxed)
+              << " short_results=" << g_scan_short_results.load(std::memory_order_relaxed)
+              << " first_key_mismatches=" << g_scan_first_key_mismatches.load(std::memory_order_relaxed)
+              << " nonconsecutive_keys=" << g_scan_nonconsecutive_keys.load(std::memory_order_relaxed)
               << std::endl;
   }
   delete db_;
@@ -374,7 +410,46 @@ DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, const std::strin
   uint64_t returned_rows = 0;
   uint64_t returned_bytes = 0;
   uint64_t returned_fields = 0;
+  uint64_t requested_key_id = 0;
+  uint64_t previous_key_id = 0;
+  bool can_check_keys = g_scan_diagnostics.load(std::memory_order_relaxed) &&
+                        ParseYcsbUserKey(key, &requested_key_id);
+  bool first_row = true;
+  bool first_key_mismatch = false;
+  bool nonconsecutive_key = false;
+  std::string mismatch_detail;
   for (int i = 0; db_iter->Valid() && i < len; i++) {
+    if (can_check_keys) {
+      uint64_t current_key_id = 0;
+      const std::string current_key = db_iter->key().ToString();
+      if (!ParseYcsbUserKey(current_key, &current_key_id)) {
+        nonconsecutive_key = true;
+        if (mismatch_detail.empty()) {
+          mismatch_detail = "unparseable_key=" + current_key;
+        }
+      } else if (first_row) {
+        if (current_key_id != requested_key_id) {
+          first_key_mismatch = true;
+          if (mismatch_detail.empty()) {
+            mismatch_detail = "first requested=" + std::to_string(requested_key_id) +
+                              " actual=" + std::to_string(current_key_id);
+          }
+        }
+        previous_key_id = current_key_id;
+      } else {
+        if (current_key_id != previous_key_id + 1) {
+          nonconsecutive_key = true;
+          if (mismatch_detail.empty()) {
+            mismatch_detail = "gap previous=" + std::to_string(previous_key_id) +
+                              " actual=" + std::to_string(current_key_id) +
+                              " requested=" + std::to_string(requested_key_id) +
+                              " row=" + std::to_string(i);
+          }
+        }
+        previous_key_id = current_key_id;
+      }
+      first_row = false;
+    }
     std::string data = db_iter->value().ToString();
     returned_bytes += data.size();
     result.push_back(std::vector<Field>());
@@ -393,6 +468,28 @@ DB::Status LeveldbDB::ScanSingleEntry(const std::string &table, const std::strin
     g_scan_rows.fetch_add(returned_rows, std::memory_order_relaxed);
     g_scan_value_bytes.fetch_add(returned_bytes, std::memory_order_relaxed);
     g_scan_fields.fetch_add(returned_fields, std::memory_order_relaxed);
+    if (returned_rows < static_cast<uint64_t>(len)) {
+      g_scan_short_results.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (first_key_mismatch) {
+      g_scan_first_key_mismatches.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (nonconsecutive_key) {
+      g_scan_nonconsecutive_keys.fetch_add(1, std::memory_order_relaxed);
+    }
+    if (!mismatch_detail.empty()) {
+      uint64_t samples_left =
+          g_scan_diagnostic_samples_left.load(std::memory_order_relaxed);
+      while (samples_left > 0) {
+        if (g_scan_diagnostic_samples_left.compare_exchange_weak(
+                samples_left, samples_left - 1, std::memory_order_relaxed)) {
+          std::cerr << "[LSBM_SCAN_DIAGNOSTIC_SAMPLE] "
+                    << mismatch_detail << " len=" << len
+                    << " rows=" << returned_rows << std::endl;
+          break;
+        }
+      }
+    }
   }
   delete db_iter;
   return kOK;
