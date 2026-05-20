@@ -345,6 +345,8 @@ def median_rows(rows: list[dict[str, Any]], suite: str) -> pd.DataFrame:
     df = df[df["returncode"].fillna(1).astype(int) == 0].copy()
     if df.empty:
         return df
+    if "x_order" in df.columns:
+        df["x_order"] = pd.to_numeric(df["x_order"], errors="coerce")
     numeric_cols = [
         "scan_throughput_ops_sec",
         "scan_p99_us",
