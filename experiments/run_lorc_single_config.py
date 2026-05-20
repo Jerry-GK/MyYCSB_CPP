@@ -68,6 +68,8 @@ class SingleConfig:
     measured_operations: int
     warmup_coverage: float
     request_distribution: str
+    validate_scan_with_iterator: bool
+    validate_scan_limit: int
     output_dir: str | None
     source_path_override: str | None
 
@@ -92,6 +94,10 @@ def load_config(path: Path) -> SingleConfig:
         measured_operations=int(raw.get("measured_operations", 30_000)),
         warmup_coverage=float(raw.get("warmup_coverage", 4.0)),
         request_distribution=str(raw.get("request_distribution", "orderedzipfian")),
+        validate_scan_with_iterator=bool(
+            raw.get("validate_scan_with_iterator", False)
+        ),
+        validate_scan_limit=int(raw.get("validate_scan_limit", 0)),
         output_dir=raw.get("output_dir"),
         source_path_override=raw.get("source_path_override"),
     )
@@ -124,6 +130,8 @@ def validate_config(cfg: SingleConfig) -> None:
         raise ValueError("warmup_coverage must be non-negative")
     if cfg.request_distribution not in {"orderedzipfian", "zipfian"}:
         raise ValueError("request_distribution must be orderedzipfian or zipfian")
+    if cfg.validate_scan_limit < 0:
+        raise ValueError("validate_scan_limit must be non-negative")
     canonical = SYSTEM_ALIASES.get(cfg.system.lower())
     if canonical is None:
         raise ValueError(
@@ -265,6 +273,9 @@ def system_props(cfg: SingleConfig, variant: fair.Variant) -> dict[str, str]:
         props["rocksdb.lorc_point_expansion_entries"] = str(
             cfg.point_expansion_entries
         )
+        if cfg.validate_scan_with_iterator:
+            props["rocksdb.validate_scan_with_iterator"] = "true"
+            props["rocksdb.validate_scan_limit"] = str(cfg.validate_scan_limit)
     if variant.label == "BlobDB+LORC" and cfg.value_size < 512:
         props["rocksdb.lorc_value_separation_aware"] = "false"
         props["rocksdb.lorc_bypass_lower_cache_on_refill"] = "false"
@@ -475,6 +486,8 @@ def run_measurement(
             "directio": cfg.directio,
             "enable_compaction": cfg.enable_compaction,
             "request_distribution": cfg.request_distribution,
+            "validate_scan_with_iterator": cfg.validate_scan_with_iterator,
+            "validate_scan_limit": cfg.validate_scan_limit,
             "run_log": str(out_dir / "run.log"),
             "time_log": str(out_dir / "run.time"),
         }
