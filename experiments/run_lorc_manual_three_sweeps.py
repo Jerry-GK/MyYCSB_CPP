@@ -153,6 +153,40 @@ def write_csv(path: Path, rows: list[dict[str, Any]]) -> None:
         writer.writerows(rows)
 
 
+def read_csv(path: Path) -> list[dict[str, Any]]:
+    if not path.exists():
+        return []
+    with path.open(newline="") as f:
+        return list(csv.DictReader(f))
+
+
+def same_point(row: dict[str, Any], point: SweepPoint) -> bool:
+    return (
+        str(row.get("suite", "")) == point.suite
+        and str(row.get("x_label", "")) == point.label
+        and str(row.get("system_key", "")) == point.system
+        and str(row.get("rep", "")) == str(point.rep)
+    )
+
+
+def successful_point_row(
+    rows: list[dict[str, Any]], point: SweepPoint
+) -> dict[str, Any] | None:
+    for row in rows:
+        if not same_point(row, point):
+            continue
+        try:
+            if int(row.get("returncode", 1) or 1) == 0:
+                return row
+        except ValueError:
+            continue
+    return None
+
+
+def remove_point_rows(rows: list[dict[str, Any]], point: SweepPoint) -> None:
+    rows[:] = [row for row in rows if not same_point(row, point)]
+
+
 def parse_lorc_kv_body(body: str) -> dict[str, float | str]:
     parsed: dict[str, float | str] = {}
     for token in body.split():
@@ -560,8 +594,13 @@ def run_sweep(
     python: str,
     stop_on_failure: bool,
     all_rows: list[dict[str, Any]] | None = None,
+    resume: bool = False,
 ) -> list[dict[str, Any]]:
-    rows: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = (
+        [row for row in all_rows if row.get("suite") == suite]
+        if all_rows is not None
+        else []
+    )
     suite_dir = run_root / suite
     suite_dir.mkdir(parents=True, exist_ok=True)
     print_rule(f"SWEEP: {suite} ({knob})")
@@ -577,6 +616,20 @@ def run_sweep(
                     system=system,
                     rep=rep,
                 )
+                if resume and all_rows is not None:
+                    existing = successful_point_row(all_rows, point)
+                    if existing is not None:
+                        print(
+                            "[resume skip] "
+                            f"{SYSTEM_LABELS.get(point.system, point.system):14s} | "
+                            f"{point.knob}={point.label:>6s} | "
+                            f"rep={point.rep} | "
+                            f"thr={fmt_float(existing.get('scan_throughput_ops_sec', 0.0), 1)} scans/s | "
+                            f"p99={fmt_float(existing.get('scan_p99_us', 0.0), 2)} us",
+                            flush=True,
+                        )
+                        continue
+
                 row = run_one_point(
                     base=base,
                     point=point,
@@ -584,6 +637,9 @@ def run_sweep(
                     run_root=run_root,
                     python=python,
                 )
+                remove_point_rows(rows, point)
+                if all_rows is not None:
+                    remove_point_rows(all_rows, point)
                 rows.append(row)
                 if all_rows is not None:
                     all_rows.append(row)
@@ -603,6 +659,20 @@ def run_sweep(
                 )
                 if stop_on_failure and int(row.get("returncode", 0) or 0) != 0:
                     raise RuntimeError(f"point failed: {point}")
+    write_csv(suite_dir / "summary.csv", rows)
+    if all_rows is not None:
+        write_csv(run_root / "summary.csv", all_rows)
+        write_lorc_range_distribution(
+            run_root / "lorc_range_distribution_median.jsonl",
+            all_rows,
+        )
+    plot_sweep(
+        rows,
+        suite=suite,
+        x_title=x_title,
+        output_dir=suite_dir,
+        systems=systems,
+    )
     print(f"[PLOT] {suite}: {suite_dir / (suite + '_throughput_p99.png')}", flush=True)
     return rows
 
@@ -629,6 +699,7 @@ def run_scan_length_sweep(
         python=args.python,
         stop_on_failure=args.stop_on_failure,
         all_rows=all_rows,
+        resume=args.resume,
     )
 
 
@@ -654,6 +725,7 @@ def run_zipfian_sweep(
         python=args.python,
         stop_on_failure=args.stop_on_failure,
         all_rows=all_rows,
+        resume=args.resume,
     )
 
 
@@ -679,6 +751,7 @@ def run_value_size_sweep(
         python=args.python,
         stop_on_failure=args.stop_on_failure,
         all_rows=all_rows,
+        resume=args.resume,
     )
 
 
@@ -704,6 +777,7 @@ def run_thread_sweep(
         python=args.python,
         stop_on_failure=args.stop_on_failure,
         all_rows=all_rows,
+        resume=args.resume,
     )
 
 
@@ -729,6 +803,7 @@ def run_update_ratio_sweep(
         python=args.python,
         stop_on_failure=args.stop_on_failure,
         all_rows=all_rows,
+        resume=args.resume,
     )
 
 
@@ -755,6 +830,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument("--stop-on-failure", action="store_true")
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help=(
+            "Resume an existing run-id: load its summary.csv, skip successful "
+            "suite/value/system/rep points, and keep appending unfinished "
+            "points in the same output directory."
+        ),
+    )
     args = parser.parse_args()
     args.systems = [s.strip() for s in args.systems.split(",") if s.strip()]
     args.suites = [s.strip() for s in args.suites.split(",") if s.strip()]
@@ -781,8 +865,15 @@ def main() -> int:
     print(f"{'systems':12s}: {', '.join(args.systems)}", flush=True)
     print(f"{'suites':12s}: {', '.join(args.suites)}", flush=True)
     print(f"{'reps':12s}: {args.reps}", flush=True)
+    print(f"{'resume':12s}: {args.resume}", flush=True)
 
     all_rows: list[dict[str, Any]] = []
+    if args.resume:
+        all_rows = read_csv(run_root / "summary.csv")
+        print(
+            f"{'loaded_rows':12s}: {len(all_rows)} from {run_root / 'summary.csv'}",
+            flush=True,
+        )
     func_by_name = {
         "scan_length": run_scan_length_sweep,
         "zipfian": run_zipfian_sweep,
