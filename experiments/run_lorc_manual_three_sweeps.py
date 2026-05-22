@@ -464,6 +464,13 @@ def generated_config(
     return cfg
 
 
+def apply_manual_overrides(base: dict[str, Any], args: argparse.Namespace) -> None:
+    if args.lsbm_compaction_buffer_use_length is not None:
+        base["lsbm_compaction_buffer_use_length"] = (
+            args.lsbm_compaction_buffer_use_length
+        )
+
+
 def estimated_record_count(cfg: dict[str, Any]) -> int:
     total_bytes = int(float(cfg.get("total_data_gb", 4.0)) * 1024 * 1024 * 1024)
     key_size = int(cfg.get("key_size", 24))
@@ -597,6 +604,7 @@ def run_sweep(
     stop_on_failure: bool,
     all_rows: list[dict[str, Any]] | None = None,
     resume: bool = False,
+    rerun_existing: bool = False,
 ) -> list[dict[str, Any]]:
     rows: list[dict[str, Any]] = (
         [row for row in all_rows if row.get("suite") == suite]
@@ -618,7 +626,7 @@ def run_sweep(
                     system=system,
                     rep=rep,
                 )
-                if resume and all_rows is not None:
+                if resume and all_rows is not None and not rerun_existing:
                     existing = successful_point_row(all_rows, point)
                     if existing is not None:
                         print(
@@ -702,6 +710,7 @@ def run_scan_length_sweep(
         stop_on_failure=args.stop_on_failure,
         all_rows=all_rows,
         resume=args.resume,
+        rerun_existing=args.rerun_existing,
     )
 
 
@@ -728,6 +737,7 @@ def run_zipfian_sweep(
         stop_on_failure=args.stop_on_failure,
         all_rows=all_rows,
         resume=args.resume,
+        rerun_existing=args.rerun_existing,
     )
 
 
@@ -754,6 +764,7 @@ def run_value_size_sweep(
         stop_on_failure=args.stop_on_failure,
         all_rows=all_rows,
         resume=args.resume,
+        rerun_existing=args.rerun_existing,
     )
 
 
@@ -780,6 +791,7 @@ def run_thread_sweep(
         stop_on_failure=args.stop_on_failure,
         all_rows=all_rows,
         resume=args.resume,
+        rerun_existing=args.rerun_existing,
     )
 
 
@@ -806,6 +818,7 @@ def run_update_ratio_sweep(
         stop_on_failure=args.stop_on_failure,
         all_rows=all_rows,
         resume=args.resume,
+        rerun_existing=args.rerun_existing,
     )
 
 
@@ -841,6 +854,22 @@ def parse_args() -> argparse.Namespace:
             "points in the same output directory."
         ),
     )
+    parser.add_argument(
+        "--rerun-existing",
+        action="store_true",
+        help=(
+            "With --resume, rerun matching points instead of skipping them; "
+            "old rows for the same suite/value/system/rep are replaced."
+        ),
+    )
+    parser.add_argument(
+        "--lsbm-compaction-buffer-use-length",
+        default=None,
+        help=(
+            "Optional LSbM-only override passed as "
+            "leveldb.compaction_buffer_use_length, e.g. 0,0,0."
+        ),
+    )
     args = parser.parse_args()
     args.systems = [s.strip() for s in args.systems.split(",") if s.strip()]
     args.suites = [s.strip() for s in args.suites.split(",") if s.strip()]
@@ -858,6 +887,7 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     base = load_base_config(args.base_config)
+    apply_manual_overrides(base, args)
     run_root = args.output_root / args.run_id
     run_root.mkdir(parents=True, exist_ok=True)
     print_rule("MANUAL LORC/YCSB SWEEPS")
@@ -868,6 +898,12 @@ def main() -> int:
     print(f"{'suites':12s}: {', '.join(args.suites)}", flush=True)
     print(f"{'reps':12s}: {args.reps}", flush=True)
     print(f"{'resume':12s}: {args.resume}", flush=True)
+    print(f"{'rerun_exist':12s}: {args.rerun_existing}", flush=True)
+    if args.lsbm_compaction_buffer_use_length is not None:
+        print(
+            f"{'lsbm_cb_use':12s}: {args.lsbm_compaction_buffer_use_length}",
+            flush=True,
+        )
 
     all_rows: list[dict[str, Any]] = []
     if args.resume:

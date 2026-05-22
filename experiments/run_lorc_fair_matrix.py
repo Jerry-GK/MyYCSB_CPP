@@ -39,7 +39,7 @@ from matplotlib.ticker import FuncFormatter
 
 
 ROOT = Path(__file__).resolve().parents[1]
-PAPER = ROOT.parent / "68368b2dccae04737d71ce11"
+PAPER = ROOT.parent / "67f612cc5f679f39029f53f4"
 MB = 1024 * 1024
 GB = 1024 * MB
 DEFAULT_CACHE_BUDGET = 1024 * MB

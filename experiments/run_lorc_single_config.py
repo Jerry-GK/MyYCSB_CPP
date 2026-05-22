@@ -70,6 +70,7 @@ class SingleConfig:
     request_distribution: str
     validate_scan_with_iterator: bool
     validate_scan_limit: int
+    lsbm_compaction_buffer_use_length: str | None
     output_dir: str | None
     source_path_override: str | None
 
@@ -98,6 +99,9 @@ def load_config(path: Path) -> SingleConfig:
             raw.get("validate_scan_with_iterator", False)
         ),
         validate_scan_limit=int(raw.get("validate_scan_limit", 0)),
+        lsbm_compaction_buffer_use_length=raw.get(
+            "lsbm_compaction_buffer_use_length"
+        ),
         output_dir=raw.get("output_dir"),
         source_path_override=raw.get("source_path_override"),
     )
@@ -282,6 +286,10 @@ def system_props(cfg: SingleConfig, variant: fair.Variant) -> dict[str, str]:
         props["rocksdb.lorc_min_materialized_value_bytes"] = "0"
     if variant.engine == "lsbm":
         props["leveldb.deserialize_on_read"] = "true"
+        if cfg.lsbm_compaction_buffer_use_length is not None:
+            props["leveldb.compaction_buffer_use_length"] = (
+                cfg.lsbm_compaction_buffer_use_length
+            )
     else:
         props["rocksdb.deserialize_on_read"] = "true"
     return props
@@ -488,6 +496,7 @@ def run_measurement(
             "request_distribution": cfg.request_distribution,
             "validate_scan_with_iterator": cfg.validate_scan_with_iterator,
             "validate_scan_limit": cfg.validate_scan_limit,
+            "lsbm_compaction_buffer_use_length": cfg.lsbm_compaction_buffer_use_length,
             "run_log": str(out_dir / "run.log"),
             "time_log": str(out_dir / "run.time"),
         }
@@ -611,6 +620,11 @@ def main() -> int:
     print(f"scan_length            : {cfg.scan_length}")
     print(f"update_ratio           : {cfg.update_ratio}")
     print(f"threads                : {cfg.threads}")
+    if cfg.lsbm_compaction_buffer_use_length is not None:
+        print(
+            "lsbm_cb_use_length     : "
+            f"{cfg.lsbm_compaction_buffer_use_length}"
+        )
     print(f"recordcount            : {dataset.recordcount}")
     print(
         f"warmup formula         : ceil({cfg.warmup_coverage} * "

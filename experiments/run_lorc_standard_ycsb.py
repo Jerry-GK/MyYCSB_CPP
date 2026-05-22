@@ -227,6 +227,17 @@ def run_experiment(
                     "log": str(out_dir / f"{log_name}.log"),
                 }
             )
+            row = rows[-1]
+            print(
+                "[STANDARD-YCSB-RESULT] "
+                f"YCSB-{row['workload']} | {row['variant']:<12} | "
+                f"throughput={float(row['throughput_ops_sec']):,.2f} ops/s | "
+                f"read_avg={float(row['read_avg_us']):.2f} us | "
+                f"scan_avg={float(row['scan_avg_us']):.2f} us | "
+                f"update_avg={float(row['update_avg_us']):.2f} us | "
+                f"rss={int(row['max_rss_kb']) / (1024 * 1024):.2f} GiB",
+                flush=True,
+            )
 
     summary = out_dir / "lorc_standard_ycsb_summary.csv"
     with summary.open("w", newline="") as f:
@@ -311,7 +322,20 @@ def main() -> int:
     parser.add_argument("--point-warmup-ops", type=int, default=DEFAULT_POINT_WARMUP_OPS)
     parser.add_argument("--point-expansion-entries", type=int, default=DEFAULT_POINT_EXPANSION_ENTRIES)
     parser.add_argument("--workloads", default="a,b,c,d,e,f")
+    parser.add_argument(
+        "--strict-standard",
+        action="store_true",
+        help=(
+            "Keep YCSB A-F workload files standard for the measured run: no extra "
+            "warmup operations and no LORC point-expansion override."
+        ),
+    )
     args = parser.parse_args()
+
+    if args.strict_standard:
+        args.e_warmup_ops = 0
+        args.point_warmup_ops = 0
+        args.point_expansion_entries = 0
 
     out_dir = args.out or (ROOT / "result" / "log" / f"lorc_standard_ycsb_{datetime.now().strftime('%Y%m%d_%H%M%S')}")
     paper_summary = PAPER / "figures" / "experiments" / "lorc_standard_ycsb_summary.csv"

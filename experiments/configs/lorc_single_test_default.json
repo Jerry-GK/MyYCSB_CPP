@@ -13,8 +13,8 @@
   "enable_compaction": false,
   "system": "rocksdb_lorc",
   "directio": false,
-  "measured_operations": 100000,
-  "warmup_coverage": 2.0,
+  "measured_operations": 500000,
+  "warmup_coverage": 4.0,
   "request_distribution": "orderedzipfian",
   "output_dir": null
 }
